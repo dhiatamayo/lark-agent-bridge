@@ -1,0 +1,37 @@
+# Secrets — NEVER commit real credentials
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# uv
+# uv.lock IS committed (reproducible installs) — do not ignore it.
+
+# Local runtime data
+transcripts/
+*.log
+
+# Tooling / editors
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.vscode/
+.idea/
+*.bak
+*.bak[0-9]
+
+# OS
+.DS_Store
+Thumbs.db

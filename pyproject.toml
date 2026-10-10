@@ -1,0 +1,41 @@
+[project]
+name = "lark-agent-bridge"
+version = "0.1.0"
+description = "A Lark (Feishu) bot that bridges chat messages to agentic coding CLIs (Kiro CLI, Antigravity agy)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Dhiatamayo Fadhlika" }]
+keywords = ["lark", "feishu", "bot", "ai-agent", "cli", "bridge"]
+dependencies = [
+    "lark-oapi>=1.6.4",
+    "requests>=2.31",
+]
+
+[project.scripts]
+lark-agent-bridge = "lark_agent_bridge.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/dhiatamayo/lark-agent-bridge"
+Repository = "https://github.com/dhiatamayo/lark-agent-bridge"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
