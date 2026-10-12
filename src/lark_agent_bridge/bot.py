@@ -17,7 +17,7 @@ from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 from . import commands
 from .config import Settings
 from .lark.client import LarkClient
-from .lark.messages import extract_text, strip_mention_placeholders
+from .lark.messages import bot_is_mentioned, extract_text, strip_mention_placeholders
 from .runner import AgentRunner
 from .transcript import TranscriptStore
 
@@ -39,6 +39,10 @@ class Bot:
         self._executor = ThreadPoolExecutor(max_workers=4)
         self._seen: OrderedDict[str, float] = OrderedDict()  # message_id dedupe
         self._seen_lock = threading.Lock()
+
+        # Resolve the bot's own open_id so group-mention gating can tell when
+        # the bot is specifically @mentioned (vs @all / other people).
+        settings.bot_open_id_resolved = settings.bot_open_id or self.client.resolve_bot_open_id()
 
     # -- dedupe ------------------------------------------------------------ #
     def _already_seen(self, message_id: str) -> bool:
@@ -107,9 +111,15 @@ class Bot:
         self.transcript.log("in", message_id=msg.message_id, msg_type=msg.message_type,
                             sender=sender, text=text, raw=msg.content)
 
-        # In group chats, only respond when the bot is @mentioned.
-        if msg.chat_type == "group" and not msg.mentions:
-            return
+        # In group chats, only respond when THIS bot is @mentioned specifically
+        # (not on @all or mentions of other people). Set GROUP_REQUIRE_BOT_MENTION=0
+        # to revert to the old "any mention" behaviour.
+        if msg.chat_type == "group":
+            if self.settings.group_require_bot_mention:
+                if not bot_is_mentioned(msg.mentions, self.settings.bot_open_id_resolved):
+                    return
+            elif not msg.mentions:
+                return
 
         text = strip_mention_placeholders(text)
         if not text:

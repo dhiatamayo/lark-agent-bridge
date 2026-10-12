@@ -25,6 +25,28 @@ def strip_mention_placeholders(text: str) -> str:
     return MENTION_PLACEHOLDER_RE.sub("", text).strip()
 
 
+def bot_is_mentioned(mentions, bot_open_id: str) -> bool:
+    """Return True when THIS bot is specifically @mentioned.
+
+    *mentions* is the message's mention list (each item exposing ``id.open_id``);
+    *bot_open_id* is the bot's own open_id. Matches only a mention that targets
+    the bot, so ``@all`` (whose ``id.open_id`` is typically ``None``) and
+    mentions of other people return False.
+
+    Fails open: when *bot_open_id* is empty (could not be resolved), any mention
+    counts as a match so the bot stays responsive rather than going silent.
+    """
+    items = mentions or []
+    if not bot_open_id:
+        return bool(items)
+    for m in items:
+        mid = getattr(m, "id", None)
+        open_id = getattr(mid, "open_id", None) if mid else None
+        if open_id and open_id == bot_open_id:
+            return True
+    return False
+
+
 def flatten_post(content: str) -> str:
     """Flatten a Lark 'post' (rich-text) content JSON into plain text.
 

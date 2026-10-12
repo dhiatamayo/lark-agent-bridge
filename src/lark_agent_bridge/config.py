@@ -64,6 +64,17 @@ class Settings:
             x.strip() for x in os.getenv("ALLOWED_OPEN_IDS", "").split(",") if x.strip()
         }
 
+        # In group chats, only reply when THIS bot is @mentioned specifically
+        # (not on @all or mentions of other people). The bot's own open_id is
+        # auto-resolved from the API at startup; set BOT_OPEN_ID to override.
+        # Set GROUP_REQUIRE_BOT_MENTION=0 to revert to the old "any mention".
+        self.bot_open_id: str = os.getenv("BOT_OPEN_ID", "").strip()
+        self.group_require_bot_mention: bool = (
+            os.getenv("GROUP_REQUIRE_BOT_MENTION", "1").strip() != "0"
+        )
+        # Filled at startup (env value or API lookup); shared across the bot.
+        self.bot_open_id_resolved: str = ""
+
         # --- Agent execution -------------------------------------------------
         self.workdir: Path = Path(os.getenv("AGENT_WORKDIR", os.getenv("KIRO_WORKDIR", str(Path.cwd())))).resolve()
         # Tools the agent may use without asking: "read,grep" (read-only),

@@ -79,3 +79,43 @@ def test_md_chunks_balances_code_fence():
     assert len(parts) > 1
     for part in parts:
         assert part.count("```") % 2 == 0  # each chunk is self-contained
+
+
+
+# -- bot_is_mentioned ------------------------------------------------------- #
+
+import types
+
+BOT = "ou_bot_123"
+
+
+def _mention(open_id):
+    return types.SimpleNamespace(id=types.SimpleNamespace(open_id=open_id))
+
+
+def test_bot_is_mentioned_specific_true():
+    assert messages.bot_is_mentioned([_mention(BOT)], BOT) is True
+
+
+def test_bot_is_mentioned_other_person_false():
+    assert messages.bot_is_mentioned([_mention("ou_other")], BOT) is False
+
+
+def test_bot_is_mentioned_at_all_false():
+    # @all typically carries no open_id.
+    assert messages.bot_is_mentioned([_mention(None)], BOT) is False
+
+
+def test_bot_is_mentioned_bot_among_others_true():
+    assert messages.bot_is_mentioned([_mention("ou_x"), _mention(BOT)], BOT) is True
+
+
+def test_bot_is_mentioned_no_mentions_false():
+    assert messages.bot_is_mentioned([], BOT) is False
+    assert messages.bot_is_mentioned(None, BOT) is False
+
+
+def test_bot_is_mentioned_fail_open_when_bot_id_unknown():
+    # Unknown bot open_id -> any mention counts (never go silent).
+    assert messages.bot_is_mentioned([_mention("ou_other")], "") is True
+    assert messages.bot_is_mentioned([], "") is False

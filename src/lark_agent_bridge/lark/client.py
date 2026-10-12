@@ -33,6 +33,9 @@ class LarkClient:
         domain = _DOMAINS.get(domain_key, lark.LARK_DOMAIN)
         self._client = lark.Client.builder().app_id(app_id).app_secret(app_secret).domain(domain).build()
         self.max_chunk = max_chunk
+        self._app_id = app_id
+        self._app_secret = app_secret
+        self._domain_key = domain_key
 
     # -- raw send ---------------------------------------------------------- #
     def _send(self, message_id: str, msg_type: str, content: dict, in_thread: bool) -> bool:
@@ -125,6 +128,38 @@ class LarkClient:
         except Exception as exc:  # never break the main flow
             logger.warning("get_message_text error: %r", exc)
             return "", ""
+
+    # -- bot identity (for @mention gating) -------------------------------- #
+    def resolve_bot_open_id(self) -> str:
+        """Return the bot's own open_id, used to detect when it is @mentioned.
+
+        Calls Lark's ``bot/v3/info`` (no extra scope needed). Best-effort:
+        returns ``""`` on any failure, in which case group-mention gating falls
+        back to "any mention" so the bot never goes silent.
+        """
+        try:
+            import requests  # provided transitively by lark-oapi
+            host = ("https://open.feishu.cn" if self._domain_key == "feishu"
+                    else "https://open.larksuite.com")
+            tok = requests.post(
+                f"{host}/open-apis/auth/v3/tenant_access_token/internal",
+                json={"app_id": self._app_id, "app_secret": self._app_secret},
+                timeout=10,
+            ).json().get("tenant_access_token")
+            if not tok:
+                logger.warning("resolve_bot_open_id: no tenant_access_token")
+                return ""
+            info = requests.get(
+                f"{host}/open-apis/bot/v3/info",
+                headers={"Authorization": f"Bearer {tok}"}, timeout=10,
+            ).json()
+            open_id = (info.get("bot") or {}).get("open_id", "")
+            if open_id:
+                logger.info("resolved bot open_id=%s", open_id)
+            return open_id
+        except Exception as exc:
+            logger.warning("resolve_bot_open_id error: %r", exc)
+            return ""
 
     @property
     def raw(self) -> lark.Client:
