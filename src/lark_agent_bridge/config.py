@@ -109,6 +109,22 @@ class Settings:
         self.agy_model: str = os.getenv("AGY_MODEL", "")      # empty => agy's own default
         self.agy_effort: str = os.getenv("AGY_EFFORT", "")    # low|medium|high|xhigh|max
 
+        # --- Observability (log access tool; additive, off by default) -------
+        # When enabled, /logs and /projects can query OpenObserve/Grafana using
+        # a project registry (pointer per project) and an encrypted secret store.
+        self.enable_observability: bool = os.getenv("ENABLE_OBSERVABILITY", "0").strip() == "1"
+        self.observability_registry: str = os.getenv("OBSERVABILITY_REGISTRY", "")
+        self.openobserve_base_url: str = os.getenv("OPENOBSERVE_BASE_URL", "").rstrip("/")
+        # Encrypted secret store location + key source (key lives OUTSIDE repo).
+        self.secrets_path: str = os.getenv("LAB_SECRETS_PATH", "")
+        self.secret_key_file: str = os.getenv("LAB_SECRET_KEY_FILE", "")
+        # Default max log rows returned to chat (hard-capped in the client too).
+        self.logs_default_limit: int = int(os.getenv("LOGS_DEFAULT_LIMIT", "50"))
+        # Timezone (hours offset from UTC) used to interpret absolute timestamps
+        # typed in `/logs ... from <date> to <date>`. OpenObserve stores UTC;
+        # people type wall-clock time. Default 7 = WIB (Asia/Jakarta).
+        self.logs_tz_offset_hours: float = float(os.getenv("LOGS_TZ_OFFSET_HOURS", "7"))
+
         # --- Process metadata ------------------------------------------------
         self.start_time: float = time.time()  # for /status uptime
 

@@ -49,7 +49,14 @@ def format_help() -> str:
         "**Operational:**\n"
         "• `/timeout [sec]` — show/adjust command timeout (default 600s)\n"
         "• `/reply [final|all]` — show/toggle reply mode\n"
-        "• `/help` — show this message"
+        "• `/help` — show this message\n\n"
+        "**Observability (logs):**\n"
+        "• `/projects` — list projects wired for log access\n"
+        "• `/logs <project> [window] [filter]` — read logs, e.g. `/logs mt4api-dev 15m error`\n"
+        "• `/logs <project> from <date time> to <date time> [filter]` — exact range,\n"
+        "  e.g. `/logs mt4api-dev from 2026-10-19 10:00:00 to 2026-10-19 11:00:00 error`\n"
+        "• `/project-add <name> <org> <stream> [window]` — register an OpenObserve project\n"
+        "• `/project-remove <name>` — unregister a project"
     )
 
 
@@ -96,6 +103,18 @@ def dispatch(text: str, runner: AgentRunner, transcript: TranscriptStore,
 
     if cmd == "/transcript" or cmd.startswith("/transcript "):
         return _transcript(raw, transcript)
+
+    if cmd == "/projects":
+        return _projects(settings)
+
+    if cmd == "/project-add" or cmd.startswith("/project-add "):
+        return _project_add(raw, settings)
+
+    if cmd == "/project-remove" or cmd.startswith("/project-remove "):
+        return _project_remove(raw, settings)
+
+    if cmd == "/logs" or cmd.startswith("/logs "):
+        return _logs(raw, settings)
 
     if cmd == "/engine" or cmd.startswith("/engine "):
         return _engine(cmd, runner, transcript, settings)
@@ -258,3 +277,142 @@ def _engine(cmd: str, runner: AgentRunner, transcript: TranscriptStore,
     else:
         note = ""
     return f"Switched engine to *{new_engine.name}* (new conversation).{note}"
+
+
+# --------------------------------------------------------------------------- #
+# Observability commands (/projects, /logs)
+# --------------------------------------------------------------------------- #
+_WINDOW_TOKEN = __import__("re").compile(r"^\d+[smhd]$", __import__("re").IGNORECASE)
+# Clock time token: HH:MM or HH:MM:SS (used to detect a 2-token end timestamp).
+_CLOCK_TOKEN = __import__("re").compile(r"^\d{1,2}:\d{2}(:\d{2})?$")
+
+
+def _observability(settings: Settings):
+    """Return the attached ObservabilityService, or None if unavailable."""
+    return getattr(settings, "observability", None)
+
+
+def _projects(settings: Settings) -> str:
+    svc = _observability(settings)
+    if svc is None:
+        return ("Log access is not enabled. Set `ENABLE_OBSERVABILITY=1` + "
+                "`OBSERVABILITY_REGISTRY` (and OpenObserve creds) to use `/logs`.")
+    return svc.list_projects()
+
+
+def _project_add(raw: str, settings: Settings) -> str:
+    """Parse ``/project-add <name> <org> <stream> [window]`` and register it.
+
+    Backend is always openobserve for now. Window is optional and defaults to
+    the registry default (15m). All inputs are validated by the registry before
+    anything is written to disk.
+    """
+    svc = _observability(settings)
+    if svc is None:
+        return ("Log access is not enabled. Set `ENABLE_OBSERVABILITY=1` + "
+                "`OBSERVABILITY_REGISTRY` (and OpenObserve creds) first.")
+
+    parts = raw.split()
+    # parts[0] == "/project-add"; need name, org, stream (+ optional window)
+    if len(parts) < 4:
+        return ("Usage: `/project-add <name> <org> <stream> [window]`\n"
+                "e.g. `/project-add mt4api-uat MTM-UAT meta_python_mt4uat_connector 15m`\n"
+                "Backend is openobserve; window defaults to 15m.")
+    name, org, stream = parts[1], parts[2], parts[3]
+    window = parts[4] if len(parts) >= 5 else None
+    return svc.add_project(name, org, stream, window)
+
+
+def _project_remove(raw: str, settings: Settings) -> str:
+    """Parse ``/project-remove <name>`` and delete it from the registry."""
+    svc = _observability(settings)
+    if svc is None:
+        return ("Log access is not enabled. Set `ENABLE_OBSERVABILITY=1` + "
+                "`OBSERVABILITY_REGISTRY` (and OpenObserve creds) first.")
+
+    parts = raw.split()
+    if len(parts) != 2:
+        return ("Usage: `/project-remove <name>`\n"
+                "See `/projects` for the list.")
+    return svc.remove_project(parts[1])
+
+
+def _logs(raw: str, settings: Settings) -> str:
+    """Parse ``/logs <project> ...`` and run the query.
+
+    Two time-range modes are supported after the project name:
+
+    - **Relative window** (default):
+      ``/logs <project> [window] [filter...]``
+      If the 2nd token looks like ``15m``/``1h`` it is the window; otherwise it
+      falls back to the project default and the rest is the free-text filter.
+
+    - **Absolute range** (``from ... to ...``):
+      ``/logs <project> from <YYYY-MM-DD[ HH:MM[:SS]]> to <...> [filter...]``
+      Timestamps are read in local time (``LOGS_TZ_OFFSET_HOURS``, default WIB).
+      Anything after the end timestamp is the free-text filter.
+    """
+    svc = _observability(settings)
+    if svc is None:
+        return ("Log access is not enabled. Set `ENABLE_OBSERVABILITY=1` + "
+                "`OBSERVABILITY_REGISTRY` (and OpenObserve creds) to use `/logs`.")
+
+    parts = raw.split()
+    if len(parts) < 2:
+        return ("Usage:\n"
+                "• `/logs <project> [window] [filter]` — e.g. `/logs mt4api-dev 15m error`\n"
+                "• `/logs <project> from <date time> to <date time> [filter]`\n"
+                "  e.g. `/logs mt4api-dev from 2026-10-19 10:00:00 to 2026-10-19 11:00:00 error`\n"
+                "See `/projects` for the list.")
+
+    project = parts[1]
+    rest = parts[2:]
+
+    # Absolute range mode: look for the `from` keyword as the first token.
+    if rest and rest[0].lower() == "from":
+        return _logs_absolute(svc, project, rest, settings)
+
+    # Relative window mode (unchanged).
+    window: str | None = None
+    if rest and _WINDOW_TOKEN.match(rest[0]):
+        window = rest[0]
+        rest = rest[1:]
+    query_text = " ".join(rest).strip() or None
+    return svc.query_logs(project, window, query_text, settings.logs_default_limit)
+
+
+def _logs_absolute(svc, project: str, rest: list[str], settings: Settings) -> str:
+    """Handle ``from <...> to <...> [filter]`` after the project name.
+
+    ``rest`` starts with the literal ``from`` token. Tokens are re-joined with
+    spaces because a timestamp like ``2026-10-19 10:00:00`` spans two tokens.
+    """
+    # Find the `to` separator (case-insensitive), splitting start vs end+filter.
+    lowered = [t.lower() for t in rest]
+    try:
+        to_idx = lowered.index("to", 1)
+    except ValueError:
+        return ("Absolute range needs a `to`, e.g.\n"
+                "`/logs <project> from 2026-10-19 10:00:00 to 2026-10-19 11:00:00`")
+
+    start_tokens = rest[1:to_idx]
+    after = rest[to_idx + 1:]
+    if not start_tokens or not after:
+        return ("Usage: `/logs <project> from <date time> to <date time> [filter]`\n"
+                "e.g. `/logs mt4api-dev from 2026-10-19 10:00:00 to 2026-10-19 11:00:00`")
+
+    start = " ".join(start_tokens)
+    # The end timestamp is 1 token (bare date) or 2 (date + time). Decide by
+    # whether the 2nd token after `to` looks like a clock time (HH:MM[:SS]).
+    end_tokens = [after[0]]
+    filter_tokens = after[1:]
+    if len(after) >= 2 and _CLOCK_TOKEN.match(after[1]):
+        end_tokens.append(after[1])
+        filter_tokens = after[2:]
+    end = " ".join(end_tokens)
+    query_text = " ".join(filter_tokens).strip() or None
+
+    return svc.query_logs(
+        project, None, query_text, settings.logs_default_limit,
+        start=start, end=end, tz_offset_hours=settings.logs_tz_offset_hours,
+    )

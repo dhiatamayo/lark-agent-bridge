@@ -23,6 +23,14 @@ env/
 transcripts/
 *.log
 
+# Observability — NEVER commit creds, keys, or internal infra pointers
+secrets.enc
+*.secrets.enc
+*.key
+observability_registry.json
+observability_registry.*.json
+DESIGN_observability.md
+
 # Tooling / editors
 .ruff_cache/
 .pytest_cache/

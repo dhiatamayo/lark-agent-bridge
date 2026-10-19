@@ -36,6 +36,13 @@ class Bot:
         )
         self.transcript = TranscriptStore(settings.transcript_dir)
         self.runner = AgentRunner(settings)
+
+        # Attach the observability service (log access) to settings so the pure
+        # command dispatcher can reach it without a wider signature. None when
+        # disabled/misconfigured — commands then report a friendly message.
+        from .observability.service import build_observability
+        settings.observability = build_observability(settings)
+
         self._executor = ThreadPoolExecutor(max_workers=4)
         self._seen: OrderedDict[str, float] = OrderedDict()  # message_id dedupe
         self._seen_lock = threading.Lock()
