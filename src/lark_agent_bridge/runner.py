@@ -21,7 +21,7 @@ class AgentRunner:
         self._lock = threading.Lock()  # one agent run at a time
         # Per-engine conversation id so sessions never bleed across engines or
         # into sessions you run yourself in the same folder.
-        self.session_ids: dict[str, str | None] = {"kiro": None, "agy": None}
+        self.session_ids: dict[str, str | None] = {"kiro": None, "agy": None, "copilot": None}
         # One-shot context preamble injected on the first prompt after a switch.
         self._pending_context: dict[str, str] = {}
         # Validate the default engine now so a bad config fails loudly.

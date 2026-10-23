@@ -5,9 +5,10 @@ from __future__ import annotations
 from ..config import Settings
 from .agy import AgyEngine
 from .base import Engine, resolve_binary
+from .copilot import CopilotEngine
 from .kiro import KiroEngine
 
-__all__ = ["Engine", "KiroEngine", "AgyEngine", "build_engine", "resolve_binary", "EngineNotFound"]
+__all__ = ["Engine", "KiroEngine", "AgyEngine", "CopilotEngine", "build_engine", "resolve_binary", "EngineNotFound"]
 
 
 class EngineNotFound(RuntimeError):
@@ -31,4 +32,9 @@ def build_engine(name: str, settings: Settings) -> Engine:
         if not binary:
             raise EngineNotFound("kiro-cli not found on PATH. Set KIRO_BIN or install Kiro CLI.")
         return KiroEngine(binary, settings)
-    raise ValueError(f"Unknown engine {name!r}. Use 'kiro' or 'agy'.")
+    if name == "copilot":
+        binary = resolve_binary(settings.copilot_bin, "copilot")
+        if not binary:
+            raise EngineNotFound("copilot (GitHub Copilot CLI) not found on PATH. Set COPILOT_BIN or install it.")
+        return CopilotEngine(binary, settings)
+    raise ValueError(f"Unknown engine {name!r}. Use 'kiro', 'agy', or 'copilot'.")

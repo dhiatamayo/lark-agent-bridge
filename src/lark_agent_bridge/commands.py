@@ -30,6 +30,22 @@ AGY_KNOWN_MODELS = [
     "gpt-oss-120b-medium",
 ]
 
+# copilot's commonly-available models (shown by /models). The exact set depends
+# on your Copilot plan and changes over time; `--model` accepts any string, and
+# `auto` lets Copilot pick. Update as the CLI/plan evolves.
+COPILOT_KNOWN_MODELS = [
+    "auto",
+    "claude-sonnet-5.5",
+    "claude-sonnet-4.6",
+    "claude-opus-4.6",
+    "gpt-5.4",
+    "gemini-3-pro",
+]
+
+# Reasoning-effort levels, per engine (used by /effort validation).
+AGY_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
+COPILOT_EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+
 
 def format_help() -> str:
     return (
@@ -40,12 +56,12 @@ def format_help() -> str:
         "• `/usage` — today's message stats from the local transcript\n"
         "• `/transcript [n]` — show the last [n] transcript entries today (default 5)\n\n"
         "**Engine & model:**\n"
-        "• `/engine` — show the active engine (kiro / agy)\n"
-        "• `/engine <kiro|agy>` — switch backend engine (+ inject recent context)\n"
+        "• `/engine` — show the active engine (kiro / agy / copilot)\n"
+        "• `/engine <kiro|agy|copilot>` — switch backend engine (+ inject recent context)\n"
         "• `/model` — show the active model on the current engine\n"
-        "• `/model <name>` — change model (agy only)\n"
-        "• `/models` — list known models (agy only)\n"
-        "• `/effort [level]` — show/set reasoning effort (agy only: low|medium|high|xhigh|max)\n\n"
+        "• `/model <name>` — change model (agy / copilot)\n"
+        "• `/models` — list known models (agy / copilot)\n"
+        "• `/effort [level]` — show/set reasoning effort (agy / copilot)\n\n"
         "**Operational:**\n"
         "• `/timeout [sec]` — show/adjust command timeout (default 600s)\n"
         "• `/reply [final|all]` — show/toggle reply mode\n"
@@ -86,11 +102,17 @@ def dispatch(text: str, runner: AgentRunner, transcript: TranscriptStore,
         return _model(raw, runner, settings)
 
     if cmd == "/models":
-        if runner.engine.name != "agy":
-            return "Model list is only available for the *agy* engine."
-        return "📋 **Available models for agy:**\n\n" + "\n".join(
-            f"• `{m}`" for m in AGY_KNOWN_MODELS
-        ) + "\n\nSelect with `/model <name>`."
+        if runner.engine.name == "agy":
+            return "📋 **Available models for agy:**\n\n" + "\n".join(
+                f"• `{m}`" for m in AGY_KNOWN_MODELS
+            ) + "\n\nSelect with `/model <name>`."
+        if runner.engine.name == "copilot":
+            return ("📋 **Common models for copilot:**\n\n" + "\n".join(
+                f"• `{m}`" for m in COPILOT_KNOWN_MODELS
+            ) + "\n\nSelect with `/model <name>`. `auto` lets Copilot pick. "
+                "The exact set depends on your Copilot plan and may change; "
+                "`--model` accepts other names too.")
+        return "Model list is only available for the *agy* and *copilot* engines."
 
     if cmd == "/effort" or cmd.startswith("/effort "):
         return _effort(raw, runner, settings)
@@ -140,6 +162,9 @@ def _status(runner: AgentRunner, transcript: TranscriptStore, settings: Settings
     if runner.engine.name == "agy":
         model_info = settings.agy_model or "default (cli)"
         effort_info = settings.agy_effort or "default"
+    elif runner.engine.name == "copilot":
+        model_info = settings.copilot_model or "default (cli)"
+        effort_info = settings.copilot_effort or "default"
     else:
         model_info = "managed by Kiro profile"
         effort_info = "n/a"
@@ -176,42 +201,58 @@ def _usage(transcript: TranscriptStore) -> str:
 
 def _model(raw: str, runner: AgentRunner, settings: Settings) -> str:
     parts = raw.split(maxsplit=1)
+    engine = runner.engine.name
     if len(parts) == 1:  # show
-        if runner.engine.name == "agy":
+        if engine == "agy":
             cur = settings.agy_model or "default (auto/cli)"
             return (f"Engine: *agy*\nActive model: `{cur}`\n\n"
+                    "Change with `/model <name>` or list with `/models`.")
+        if engine == "copilot":
+            cur = settings.copilot_model or "default (cli, e.g. auto)"
+            return (f"Engine: *copilot*\nActive model: `{cur}`\n\n"
                     "Change with `/model <name>` or list with `/models`.")
         return ("Engine: *kiro*\nModel is managed server-side by the Kiro "
                 "profile and cannot be changed via the CLI.")
     # set
     new_model = parts[1].strip()
-    if runner.engine.name != "agy":
-        return "Kiro does not support changing models via the CLI. This is agy-only."
-    if new_model.lower() in ("default", "reset", "clear"):
-        settings.agy_model = ""
-        return "agy model reset to the CLI default."
-    settings.agy_model = new_model
-    return f"agy model set to `{settings.agy_model}`."
+    if engine == "agy":
+        if new_model.lower() in ("default", "reset", "clear"):
+            settings.agy_model = ""
+            return "agy model reset to the CLI default."
+        settings.agy_model = new_model
+        return f"agy model set to `{settings.agy_model}`."
+    if engine == "copilot":
+        if new_model.lower() in ("default", "reset", "clear"):
+            settings.copilot_model = ""
+            return "copilot model reset to the CLI default."
+        settings.copilot_model = new_model
+        return f"copilot model set to `{settings.copilot_model}`."
+    return "Kiro does not support changing models via the CLI. This is agy/copilot-only."
 
 
 def _effort(raw: str, runner: AgentRunner, settings: Settings) -> str:
     parts = raw.split(maxsplit=1)
+    engine = runner.engine.name
+    if engine == "agy":
+        levels, attr = AGY_EFFORT_LEVELS, "agy_effort"
+    elif engine == "copilot":
+        levels, attr = COPILOT_EFFORT_LEVELS, "copilot_effort"
+    else:
+        return "Reasoning effort is only supported by the *agy* and *copilot* engines."
+
     if len(parts) == 1:  # show
-        if runner.engine.name == "agy":
-            cur = settings.agy_effort or "default"
-            return (f"Engine: *agy*\nReasoning effort: `{cur}`\n\n"
-                    "Options: `low`, `medium`, `high`, `xhigh`, `max`, or `default`.")
-        return "Reasoning effort is only supported by the *agy* engine."
-    if runner.engine.name != "agy":
-        return "Reasoning effort is only supported by the *agy* engine."
+        cur = getattr(settings, attr) or "default"
+        opts = ", ".join(f"`{x}`" for x in levels)
+        return (f"Engine: *{engine}*\nReasoning effort: `{cur}`\n\n"
+                f"Options: {opts}, or `default`.")
     lvl = parts[1].strip().lower()
     if lvl in ("default", "reset", "clear"):
-        settings.agy_effort = ""
-        return "agy effort reset to default."
-    if lvl in ("low", "medium", "high", "xhigh", "max"):
-        settings.agy_effort = lvl
-        return f"agy effort set to `{settings.agy_effort}`."
-    return f"Invalid effort level `{lvl}`. Use: low, medium, high, xhigh, max."
+        setattr(settings, attr, "")
+        return f"{engine} effort reset to default."
+    if lvl in levels:
+        setattr(settings, attr, lvl)
+        return f"{engine} effort set to `{lvl}`."
+    return f"Invalid effort level `{lvl}`. Use: {', '.join(levels)}."
 
 
 def _timeout(raw: str, settings: Settings) -> str:
@@ -259,8 +300,8 @@ def _engine(cmd: str, runner: AgentRunner, transcript: TranscriptStore,
             settings: Settings) -> str:
     parts = cmd.split()
     if len(parts) == 1:  # show
-        return (f"Active engine: *{runner.engine.name}*. Available: kiro, agy.\n"
-                "Switch with `/engine kiro` or `/engine agy`.")
+        return (f"Active engine: *{runner.engine.name}*. Available: kiro, agy, copilot.\n"
+                "Switch with `/engine kiro`, `/engine agy`, or `/engine copilot`.")
     target = parts[1]
     if target == runner.engine.name:
         return f"Already on *{target}*."

@@ -25,7 +25,7 @@ class _FakeRunner:
 
     def __init__(self, engine_name="kiro"):
         self.engine = _FakeEngine(engine_name)
-        self.session_ids = {"kiro": None, "agy": None}
+        self.session_ids = {"kiro": None, "agy": None, "copilot": None}
         self.queued = {}
 
     def reset_session(self):
@@ -33,7 +33,7 @@ class _FakeRunner:
 
     def switch_engine(self, name):
         name = name.strip().lower()
-        if name not in ("kiro", "agy"):
+        if name not in ("kiro", "agy", "copilot"):
             raise ValueError(f"Unknown engine {name!r}")
         # Simulate agy not installed to exercise the EngineNotFound path.
         if name == "agy" and getattr(self, "agy_missing", False):
@@ -121,7 +121,7 @@ def test_model_set_under_agy(settings, transcript):
 
 def test_models_under_kiro(settings, transcript):
     out = commands.dispatch("/models", _FakeRunner("kiro"), transcript, settings)
-    assert "only available for the *agy*" in out
+    assert "*agy* and *copilot*" in out
 
 
 def test_effort_valid_under_agy(settings, transcript):
@@ -138,7 +138,59 @@ def test_effort_invalid_under_agy(settings, transcript):
 
 def test_effort_under_kiro(settings, transcript):
     out = commands.dispatch("/effort", _FakeRunner("kiro"), transcript, settings)
-    assert "only supported by the *agy*" in out
+    assert "*agy* and *copilot*" in out
+
+
+# --- copilot engine commands ----------------------------------------------- #
+def test_engine_switch_copilot(settings, transcript):
+    runner = _FakeRunner("kiro")
+    out = commands.dispatch("/engine copilot", runner, transcript, settings)
+    assert runner.engine.name == "copilot"
+    assert "Switched engine" in out
+
+
+def test_model_show_under_copilot(settings, transcript):
+    out = commands.dispatch("/model", _FakeRunner("copilot"), transcript, settings)
+    assert "copilot" in out.lower()
+
+
+def test_model_set_under_copilot(settings, transcript):
+    runner = _FakeRunner("copilot")
+    out = commands.dispatch("/model gpt-5.4", runner, transcript, settings)
+    assert settings.copilot_model == "gpt-5.4"
+    assert "copilot model set" in out.lower()
+
+
+def test_model_reset_under_copilot(settings, transcript):
+    runner = _FakeRunner("copilot")
+    settings.copilot_model = "gpt-5.4"
+    out = commands.dispatch("/model default", runner, transcript, settings)
+    assert settings.copilot_model == ""
+    assert "reset" in out.lower()
+
+
+def test_models_under_copilot(settings, transcript):
+    out = commands.dispatch("/models", _FakeRunner("copilot"), transcript, settings)
+    assert "copilot" in out.lower()
+    assert "auto" in out  # auto is listed
+
+
+def test_effort_valid_under_copilot(settings, transcript):
+    runner = _FakeRunner("copilot")
+    out = commands.dispatch("/effort minimal", runner, transcript, settings)
+    assert settings.copilot_effort == "minimal"  # copilot-specific level
+    assert "effort set" in out.lower()
+
+
+def test_effort_none_under_copilot(settings, transcript):
+    runner = _FakeRunner("copilot")
+    out = commands.dispatch("/effort none", runner, transcript, settings)
+    assert settings.copilot_effort == "none"
+
+
+def test_effort_invalid_under_copilot(settings, transcript):
+    out = commands.dispatch("/effort turbo", _FakeRunner("copilot"), transcript, settings)
+    assert "invalid effort" in out.lower()
 
 
 def test_timeout_set(settings, transcript):
