@@ -43,6 +43,11 @@ class Bot:
         from .observability.service import build_observability
         settings.observability = build_observability(settings)
 
+        # Attach the Jira service (read-only ticket triage) the same way. None
+        # when disabled/misconfigured — /jira then reports a friendly message.
+        from .jira.service import build_jira
+        settings.jira = build_jira(settings)
+
         # Knowledge retrieval (Postgres FTS): inject relevant past-session
         # chunks into each prompt instead of loading the whole markdown. None
         # when disabled/unavailable → prompts go through unchanged (fail-open).

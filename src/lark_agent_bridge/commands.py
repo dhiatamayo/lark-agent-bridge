@@ -72,7 +72,12 @@ def format_help() -> str:
         "• `/logs <project> from <date time> to <date time> [filter]` — exact range,\n"
         "  e.g. `/logs mt4api-dev from 2026-10-19 10:00:00 to 2026-10-19 11:00:00 error`\n"
         "• `/project-add <name> <org> <stream> [window]` — register an OpenObserve project\n"
-        "• `/project-remove <name>` — unregister a project"
+        "• `/project-remove <name>` — unregister a project\n\n"
+        "**Jira (tickets):**\n"
+        "• `/jira` — open issues in the default project (stalest first)\n"
+        "• `/jira <PROJECT>` — open issues in that project, e.g. `/jira SIT`\n"
+        "• `/jira <JQL>` — run any JQL, e.g. "
+        "`/jira assignee = currentUser() AND statusCategory != Done ORDER BY updated ASC`"
     )
 
 
@@ -137,6 +142,9 @@ def dispatch(text: str, runner: AgentRunner, transcript: TranscriptStore,
 
     if cmd == "/logs" or cmd.startswith("/logs "):
         return _logs(raw, settings)
+
+    if cmd == "/jira" or cmd.startswith("/jira "):
+        return _jira(raw, settings)
 
     if cmd == "/engine" or cmd.startswith("/engine "):
         return _engine(cmd, runner, transcript, settings)
@@ -457,3 +465,22 @@ def _logs_absolute(svc, project: str, rest: list[str], settings: Settings) -> st
         project, None, query_text, settings.logs_default_limit,
         start=start, end=end, tz_offset_hours=settings.logs_tz_offset_hours,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Jira command (/jira)
+# --------------------------------------------------------------------------- #
+def _jira(raw: str, settings: Settings) -> str:
+    """Parse ``/jira [JQL | PROJECT]`` and run a read-only search.
+
+    - ``/jira``            -> configured default project/JQL
+    - ``/jira SIT``        -> open issues in SIT, stalest first
+    - ``/jira <full JQL>`` -> run the JQL verbatim
+    """
+    svc = getattr(settings, "jira", None)
+    if svc is None:
+        return ("Jira access is not enabled. Set `ENABLE_JIRA=1` + `JIRA_BASE_URL` "
+                "(and Jira creds in the secret store) to use `/jira`.")
+    parts = raw.split(maxsplit=1)
+    jql = parts[1].strip() if len(parts) > 1 else None
+    return svc.search(jql, settings.jira_default_limit)

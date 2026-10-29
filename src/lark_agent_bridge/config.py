@@ -133,6 +133,22 @@ class Settings:
         # people type wall-clock time. Default 7 = WIB (Asia/Jakarta).
         self.logs_tz_offset_hours: float = float(os.getenv("LOGS_TZ_OFFSET_HOURS", "7"))
 
+        # --- Jira (read-only ticket triage; additive, off by default) --------
+        # When enabled, /jira can run read-only JQL searches against Jira Cloud
+        # using the encrypted secret store (jira.email / jira.token). The base
+        # URL and default project/JQL are plain config so switching boards needs
+        # no code change. Fail-open: disabled / misconfigured => bot runs as before.
+        self.enable_jira: bool = os.getenv("ENABLE_JIRA", "0").strip() == "1"
+        # e.g. https://dxtr-asia.atlassian.net
+        self.jira_base_url: str = os.getenv("JIRA_BASE_URL", "").rstrip("/")
+        # Default project key used when no JQL is given (e.g. SIT). Configurable
+        # so moving boards/projects is an env change, not a code change.
+        self.jira_default_project: str = os.getenv("JIRA_DEFAULT_PROJECT", "").strip()
+        # Optional full default JQL (wins over the project shortcut if set).
+        self.jira_default_jql: str = os.getenv("JIRA_DEFAULT_JQL", "").strip()
+        # Default max issues returned (hard-capped at 100 in the client too).
+        self.jira_default_limit: int = int(os.getenv("JIRA_DEFAULT_LIMIT", "30"))
+
         # --- Knowledge retrieval (Postgres FTS; additive, off by default) ----
         # When enabled, each request retrieves the most relevant chunks of past
         # knowledge (LOG_SESSIONS, BACKLOG, etc.) from Postgres and injects them
