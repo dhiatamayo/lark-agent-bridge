@@ -14,6 +14,7 @@ from lark_oapi.api.im.v1 import (
     DeleteMessageReactionRequest,
     Emoji,
     GetMessageRequest,
+    ListMessageRequest,
     PatchMessageRequest,
     PatchMessageRequestBody,
     ReplyMessageRequest,
@@ -175,6 +176,60 @@ class LarkClient:
         except Exception as exc:  # never break the main flow
             logger.warning("get_message_text error: %r", exc)
             return "", ""
+
+    # -- fetch a whole thread (for @mention-in-thread context) ------------- #
+    def list_thread_messages(
+        self, thread_id: str, max_messages: int = 40
+    ) -> list[tuple[str, str]]:
+        """Return a thread's messages oldest-first as ``(sender_name, text)``.
+
+        Used when a user @mentions the bot inside a reply thread: instead of
+        only pulling the single parent, we read the full conversation so the
+        bot has the thread's context (e.g. a teammate's agent dropped an MR
+        and a discussion followed). Uses ``im.v1.message.list`` with
+        ``container_id_type="thread"`` + ``with_sender_name`` (no extra scope).
+
+        Best-effort: returns ``[]`` on any failure/unsupported type. Caps at
+        ``max_messages`` (across pages) so a long thread can't flood context.
+        """
+        out: list[tuple[str, str]] = []
+        page_token: str | None = None
+        try:
+            while len(out) < max_messages:
+                builder = (
+                    ListMessageRequest.builder()
+                    .container_id_type("thread")
+                    .container_id(thread_id)
+                    .sort_type("ByCreateTimeAsc")
+                    .with_sender_name(True)
+                    .page_size(min(50, max_messages - len(out)))
+                )
+                if page_token:
+                    builder = builder.page_token(page_token)
+                resp = self._client.im.v1.message.list(builder.build())
+                if not resp.success():
+                    logger.warning(
+                        "list_thread_messages failed: %s %s", resp.code, resp.msg
+                    )
+                    break
+                data = resp.data
+                for item in (data.items or []) if data else []:
+                    content = item.body.content if item.body else ""
+                    text = extract_text(item.msg_type or "", content or "")
+                    if not text:
+                        continue
+                    name = ""
+                    if item.sender and getattr(item.sender, "sender_name", None):
+                        name = item.sender.sender_name
+                    out.append((name, text))
+                    if len(out) >= max_messages:
+                        break
+                if not data or not data.has_more or not data.page_token:
+                    break
+                page_token = data.page_token
+        except Exception as exc:  # never break the main flow
+            logger.warning("list_thread_messages error: %r", exc)
+        return out
 
     # -- bot identity (for @mention gating) -------------------------------- #
     def resolve_bot_open_id(self) -> str:

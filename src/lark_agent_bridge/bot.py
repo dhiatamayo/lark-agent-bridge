@@ -189,6 +189,23 @@ class Bot:
         self.transcript.log("in", message_id=msg.message_id, msg_type=msg.message_type,
                             sender=sender, text=text, raw=msg.content)
 
+        logger.info(
+            "inbound diag: chat_type=%s thread_id=%r parent_id=%r root_id=%r",
+            getattr(msg, "chat_type", None),
+            getattr(msg, "thread_id", None),
+            getattr(msg, "parent_id", None),
+            getattr(msg, "root_id", None),
+        )
+        self.transcript.log(
+            "in", message_id=msg.message_id, msg_type="diag", sender=sender,
+            text=(
+                f"chat_type={getattr(msg,'chat_type',None)} "
+                f"thread_id={getattr(msg,'thread_id',None)!r} "
+                f"parent_id={getattr(msg,'parent_id',None)!r} "
+                f"root_id={getattr(msg,'root_id',None)!r}"
+            ),
+        )
+
         # In group chats, only respond when THIS bot is @mentioned specifically
         # (not on @all or mentions of other people). Set GROUP_REQUIRE_BOT_MENTION=0
         # to revert to the old "any mention" behaviour.
@@ -203,11 +220,33 @@ class Bot:
         if not text:
             return
 
-        # If the user replied to another message and @mentioned the bot (the
-        # typical "review this" flow), pull in the parent message for context.
-        parent_id = getattr(msg, "parent_id", None) or getattr(msg, "root_id", None)
+        # If the user @mentioned the bot inside a reply thread, pull in context.
+        # Prefer the WHOLE thread (so the bot sees the full discussion, e.g. a
+        # teammate's agent dropped an MR and a conversation followed); fall back
+        # to just the single parent message if there's no thread. Both are
+        # best-effort — on failure the prompt is just the user's text.
         prompt = text
-        if parent_id and parent_id != msg.message_id:
+        thread_id = getattr(msg, "thread_id", None)
+        parent_id = getattr(msg, "parent_id", None) or getattr(msg, "root_id", None)
+
+        thread_ctx = ""
+        if thread_id:
+            msgs = self.client.list_thread_messages(thread_id)
+            # Drop the user's own just-sent @mention (it's already the request).
+            convo = [(n, t) for n, t in msgs if t.strip() != text.strip()]
+            if convo:
+                lines = [f"{n or 'unknown'}: {t}" for n, t in convo]
+                thread_ctx = "\n".join(lines)
+                self.transcript.log("in", message_id=thread_id, msg_type="thread",
+                                    sender="", text=thread_ctx)
+
+        if thread_ctx:
+            prompt = (
+                f"[Context — the thread the user is replying in "
+                f"(oldest first, 'sender: message')]:\n{thread_ctx}\n\n"
+                f"[User request]:\n{text}"
+            )
+        elif parent_id and parent_id != msg.message_id:
             p_sender, p_text = self.client.get_message_text(parent_id)
             if p_text:
                 self.transcript.log("in", message_id=parent_id, msg_type="parent",
