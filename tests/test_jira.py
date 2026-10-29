@@ -228,3 +228,118 @@ def test_service_search_error_is_friendly_string():
     svc = JiraService(client, default_project="SIT")
     out = svc.search(None, 30)
     assert out.startswith("⚠️")  # never raises to the caller
+
+
+# --------------------------- team roster / shortcuts ------------------------ #
+_ROSTER = ["Dhiatamayo Fadhlika", "Asep Wahyudin", "Dyeva Mahaputra",
+           "tri wibowo", "Aldo Karendra"]
+
+
+def _team_service(default_project="SIT", roster=None):
+    sess = _FakeSession(_FakeResponse(payload={"issues": [], "total": 0}))
+    client = JiraClient("https://x.atlassian.net", _store(), session=sess)
+    svc = JiraService(
+        client, default_project=default_project,
+        team_members=_ROSTER if roster is None else roster,
+    )
+    return svc, sess
+
+
+def test_quote_escapes_backslash_and_quote():
+    assert JiraService._quote('a"b') == '"a\\"b"'
+    assert JiraService._quote("a\\b") == '"a\\\\b"'
+
+
+def test_resolve_jql_team_shortcut_lists_all_members():
+    svc, _ = _team_service()
+    jql = svc.resolve_jql("team")
+    # scoped to the default project
+    assert 'project = "SIT" AND' in jql
+    # every roster member appears, quoted, inside assignee IN (...)
+    assert "assignee IN (" in jql
+    for name in _ROSTER:
+        assert f'"{name}"' in jql
+    assert "statusCategory != Done" in jql
+    assert "ORDER BY updated ASC" in jql
+
+
+def test_resolve_jql_team_case_insensitive():
+    svc, _ = _team_service()
+    assert "assignee IN (" in svc.resolve_jql("TEAM")
+
+
+def test_resolve_jql_team_without_roster_raises():
+    svc, _ = _team_service(roster=[])
+    with pytest.raises(JiraError) as exc:
+        svc.resolve_jql("team")
+    assert "roster" in str(exc.value).lower()
+
+
+def test_resolve_jql_team_without_project_has_no_project_clause():
+    svc, _ = _team_service(default_project="")
+    jql = svc.resolve_jql("team")
+    assert "project =" not in jql
+    assert jql.startswith("assignee IN (")
+
+
+def test_resolve_jql_at_name_exact_member():
+    svc, _ = _team_service()
+    jql = svc.resolve_jql("@Asep Wahyudin")
+    assert 'assignee = "Asep Wahyudin"' in jql
+    assert 'project = "SIT" AND' in jql
+    assert "statusCategory != Done" in jql
+
+
+def test_resolve_jql_at_name_substring_match():
+    svc, _ = _team_service()
+    jql = svc.resolve_jql("@dyeva")  # case-insensitive substring
+    assert 'assignee = "Dyeva Mahaputra"' in jql
+
+
+def test_resolve_jql_at_name_no_match_raises():
+    svc, _ = _team_service()
+    with pytest.raises(JiraError) as exc:
+        svc.resolve_jql("@nobody")
+    assert "no team member" in str(exc.value).lower()
+
+
+def test_resolve_jql_at_name_ambiguous_raises():
+    # two members share the substring "a" -> ambiguous -> no single match
+    svc, _ = _team_service(roster=["Asep Wahyudin", "Aldo Karendra"])
+    with pytest.raises(JiraError):
+        svc.resolve_jql("@a")
+
+
+def test_resolve_jql_bare_project_key_still_wins_over_member():
+    # a bare alnum token is a PROJECT key, never a member (members need @)
+    svc, _ = _team_service()
+    jql = svc.resolve_jql("SIT")
+    assert 'project = "SIT"' in jql
+    assert "assignee" not in jql
+
+
+def test_resolve_jql_alias_resolves_to_displayname():
+    sess = _FakeSession(_FakeResponse(payload={"issues": [], "total": 0}))
+    client = JiraClient("https://x.atlassian.net", _store(), session=sess)
+    svc = JiraService(
+        client, default_project="SIT",
+        team_members=["Billisany Akhyar", "tri wibowo"],
+        aliases={"billy": "Billisany Akhyar", "bowo": "tri wibowo"},
+    )
+    # alias that is NOT a substring of the displayName still resolves
+    jql = svc.resolve_jql("@billy")
+    assert 'assignee = "Billisany Akhyar"' in jql
+    # alias is case-insensitive
+    assert 'assignee = "Billisany Akhyar"' in svc.resolve_jql("@BILLY")
+
+
+def test_resolve_jql_alias_wins_over_substring():
+    # 'bowo' is a substring of 'tri wibowo' AND an alias -> alias path is fine
+    sess = _FakeSession(_FakeResponse(payload={"issues": [], "total": 0}))
+    client = JiraClient("https://x", _store(), session=sess)
+    svc = JiraService(
+        client, default_project="SIT",
+        team_members=["tri wibowo"],
+        aliases={"bowo": "tri wibowo"},
+    )
+    assert 'assignee = "tri wibowo"' in svc.resolve_jql("@bowo")

@@ -27,20 +27,110 @@ class JiraService:
         client: JiraClient,
         default_project: str = "",
         default_jql: str = "",
+        team_members: list[str] | None = None,
+        aliases: dict[str, str] | None = None,
     ):
         self.client = client
         self.default_project = default_project.strip()
         self.default_jql = default_jql.strip()
+        # Jira displayNames of the team (for the `team` / `@name` shortcuts).
+        self.team_members = [m.strip() for m in (team_members or []) if m.strip()]
+        # Optional nickname -> displayName map (e.g. "billy" -> "Billisany
+        # Akhyar") so `@billy` resolves even when the Jira name differs. Keys
+        # are lowercased for case-insensitive lookup.
+        self.aliases: dict[str, str] = {
+            k.strip().lower(): v.strip()
+            for k, v in (aliases or {}).items()
+            if k.strip() and v.strip()
+        }
+
+    # -- helpers ----------------------------------------------------------- #
+    @staticmethod
+    def _quote(value: str) -> str:
+        r"""Quote a JQL string value, escaping ``\`` and ``"``.
+
+        JQL string literals are double-quoted; backslash and double-quote must
+        be backslash-escaped. Keeps display names with spaces/quotes safe.
+        """
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    def _match_member(self, needle: str) -> str | None:
+        """Resolve a loose ``@name`` token to a roster displayName.
+
+        Matches case-insensitively: exact first, then substring. Returns the
+        canonical roster name, or ``None`` if nothing matches.
+        """
+        q = needle.strip().lower()
+        if not q:
+            return None
+        # 1) explicit nickname alias wins (e.g. "billy" -> "Billisany Akhyar").
+        if q in self.aliases:
+            return self.aliases[q]
+        # 2) exact displayName match.
+        for m in self.team_members:
+            if m.lower() == q:
+                return m
+        # 3) unambiguous substring match.
+        hits = [m for m in self.team_members if q in m.lower()]
+        return hits[0] if len(hits) == 1 else None
+
+    def _project_clause(self) -> str:
+        """``project = "X" AND `` prefix if a default project is set, else ``''``."""
+        return (
+            f"project = {self._quote(self.default_project)} AND "
+            if self.default_project
+            else ""
+        )
 
     # -- JQL resolution ---------------------------------------------------- #
     def resolve_jql(self, jql: str | None) -> str:
         """Pick the JQL to run: explicit > configured default > project-scoped.
 
-        A bare project key (e.g. ``SIT``) is treated as a shortcut for
-        "open issues in that project, stalest first".
+        Recognised shortcuts (when ``jql`` is a lone token):
+            * a project key (e.g. ``SIT``)  -> open issues in that project.
+            * ``team``                      -> open issues assigned to any
+              roster member (``JIRA_TEAM_MEMBERS``).
+            * ``@name`` / ``name``          -> open issues for one roster member
+              (loose, case-insensitive match).
+        All shortcuts are stalest-first (``ORDER BY updated ASC``).
         """
         if jql and jql.strip():
             text = jql.strip()
+
+            # Shortcut: whole team.
+            if text.lower() == "team":
+                if not self.team_members:
+                    raise JiraError(
+                        "no team roster configured (set JIRA_TEAM_MEMBERS in .env)"
+                    )
+                names = ", ".join(self._quote(m) for m in self.team_members)
+                return (
+                    f"{self._project_clause()}assignee IN ({names}) "
+                    "AND statusCategory != Done ORDER BY updated ASC"
+                )
+
+            # Shortcut: a single roster member via @name (or a bare name that
+            # resolves to exactly one member).
+            member: str | None = None
+            if text.startswith("@"):
+                member = self._match_member(text[1:])
+                if member is None:
+                    raise JiraError(
+                        f"no team member matches '{text[1:]}' "
+                        "(check JIRA_TEAM_MEMBERS)"
+                    )
+            elif " " not in text and not text.replace("-", "").isalnum():
+                # e.g. a name token with a dot; alnum tokens fall through to the
+                # project-key shortcut below.
+                member = self._match_member(text)
+
+            if member is not None:
+                return (
+                    f"{self._project_clause()}assignee = {self._quote(member)} "
+                    "AND statusCategory != Done ORDER BY updated ASC"
+                )
+
             # Shortcut: a lone token that looks like a project key.
             if text.replace("-", "").isalnum() and " " not in text:
                 return (
@@ -126,6 +216,8 @@ def build_jira(settings: Settings) -> JiraService | None:
         client,
         default_project=settings.jira_default_project,
         default_jql=settings.jira_default_jql,
+        team_members=settings.jira_team_members,
+        aliases=settings.jira_team_aliases,
     )
 
 

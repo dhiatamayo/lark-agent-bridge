@@ -148,6 +148,25 @@ class Settings:
         self.jira_default_jql: str = os.getenv("JIRA_DEFAULT_JQL", "").strip()
         # Default max issues returned (hard-capped at 100 in the client too).
         self.jira_default_limit: int = int(os.getenv("JIRA_DEFAULT_LIMIT", "30"))
+        # Team roster (Jira displayNames, comma separated) so a lead can query
+        # the whole team's tickets. Powers the `team` and `@name` JQL shortcuts
+        # (see JiraService). Plain config — add/remove a member by editing .env,
+        # no code change. Empty => the shortcuts are unavailable (clear error).
+        self.jira_team_members: list[str] = [
+            x.strip()
+            for x in os.getenv("JIRA_TEAM_MEMBERS", "").split(",")
+            if x.strip()
+        ]
+        # Optional nickname -> displayName aliases for the `@name` shortcut, so a
+        # lead can type `@billy` even if Jira shows "Billisany Akhyar". Format:
+        # "alias=Display Name" pairs, comma separated. No code change to tweak.
+        self.jira_team_aliases: dict[str, str] = {}
+        for pair in os.getenv("JIRA_TEAM_ALIASES", "").split(","):
+            pair = pair.strip()
+            if "=" in pair:
+                alias, name = pair.split("=", 1)
+                if alias.strip() and name.strip():
+                    self.jira_team_aliases[alias.strip()] = name.strip()
 
         # --- Knowledge retrieval (Postgres FTS; additive, off by default) ----
         # When enabled, each request retrieves the most relevant chunks of past
