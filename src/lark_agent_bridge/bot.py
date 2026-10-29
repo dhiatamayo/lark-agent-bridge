@@ -17,7 +17,7 @@ from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 from . import commands
 from .config import Settings
 from .lark.client import LarkClient
-from .lark.messages import bot_is_mentioned, extract_text, strip_mention_placeholders
+from .lark.messages import bot_is_mentioned, extract_text, md_chunks, strip_mention_placeholders
 from .runner import AgentRunner
 from .transcript import TranscriptStore
 
@@ -42,6 +42,30 @@ class Bot:
         # disabled/misconfigured — commands then report a friendly message.
         from .observability.service import build_observability
         settings.observability = build_observability(settings)
+
+        # Knowledge retrieval (Postgres FTS): inject relevant past-session
+        # chunks into each prompt instead of loading the whole markdown. None
+        # when disabled/unavailable → prompts go through unchanged (fail-open).
+        from .knowledge.service import build_knowledge
+        self.knowledge = build_knowledge(settings)
+
+        # Sync the knowledge DB with the source markdown on startup so the DB
+        # never drifts behind the files after a memory update + restart.
+        # Idempotent (unchanged chunks skipped) and fail-open (any error just
+        # logs a warning; retrieval still runs against whatever is in the DB).
+        if self.knowledge is not None and getattr(settings, "knowledge_auto_ingest", True):
+            try:
+                from .knowledge.ingest import ingest_configured
+                summary = ingest_configured(settings)
+                logger.info(
+                    "knowledge auto-ingest: sources=%d chunks=%d inserted=%d "
+                    "updated=%d skipped=%d pruned=%d",
+                    summary.get("sources", 0), summary.get("chunks", 0),
+                    summary.get("inserted", 0), summary.get("updated", 0),
+                    summary.get("skipped", 0), summary.get("pruned", 0),
+                )
+            except Exception as exc:
+                logger.warning("knowledge auto-ingest skipped: %r", exc)
 
         self._executor = ThreadPoolExecutor(max_workers=4)
         self._seen: OrderedDict[str, float] = OrderedDict()  # message_id dedupe
@@ -74,6 +98,20 @@ class Bot:
             self._reply(message_id, reply_text, in_thread)
             return
 
+        # Retrieve relevant past-session knowledge and prepend it (fail-open:
+        # any error → empty string → prompt unchanged).
+        if self.knowledge is not None:
+            memory = self.knowledge.relevant(prompt)
+            if memory:
+                prompt = (
+                    f"[Relevant memory from past sessions — use if helpful]:\n{memory}\n\n"
+                    f"[Current request]:\n{prompt}"
+                )
+
+        if self.settings.enable_streaming:
+            self._handle_streaming(message_id, prompt, in_thread)
+            return
+
         reaction_id = self.client.add_reaction(message_id, self.settings.typing_emoji)
         try:
             answer = self.runner.run(prompt)
@@ -83,6 +121,39 @@ class Bot:
             self._reply(message_id, answer, in_thread)
         finally:
             self.client.remove_reaction(message_id, reaction_id)
+
+    def _handle_streaming(self, message_id: str, prompt: str, in_thread: bool) -> None:
+        """Streaming variant: show a live-updating progress card while the agent
+        works, then render the final answer. Falls back to a normal reply if the
+        progress card can't be posted (so we never go silent)."""
+        progress_mid = self.client.post_card(message_id, "⏳ thinking…", in_thread)
+        if not progress_mid:
+            # Couldn't open a progress card — degrade to the blocking path.
+            try:
+                answer = self.runner.run(prompt)
+            except Exception as exc:
+                answer = f"Bridge error: {exc!r}"
+            self._reply(message_id, answer, in_thread)
+            return
+
+        def on_progress(label: str) -> None:
+            self.client.update_card(progress_mid, f"⏳ {label}")
+
+        try:
+            answer = self.runner.run_streaming(prompt, on_progress)
+        except Exception as exc:
+            answer = f"Bridge error: {exc!r}"
+
+        # Render the final answer. If it fits one card, edit the progress card in
+        # place. If it needs chunking, finish the card and send the full reply.
+        parts = list(md_chunks(answer, self.settings.max_chunk))
+        if len(parts) <= 1:
+            if not self.client.update_card(progress_mid, answer):
+                self.client.reply(message_id, answer, in_thread)
+        else:
+            self.client.update_card(progress_mid, "✅ done — full answer below")
+            self.client.reply(message_id, answer, in_thread)
+        self.transcript.log("out", message_id=message_id, msg_type="reply", text=answer)
 
     # -- inbound event ----------------------------------------------------- #
     def on_message(self, data: P2ImMessageReceiveV1) -> None:

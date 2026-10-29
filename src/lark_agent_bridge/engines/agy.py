@@ -63,3 +63,19 @@ class AgyEngine(Engine):
         # The result event already carries the whole final answer; prefer it.
         segments = [response.strip()] if response else []
         return segments, sid, ok
+
+    def progress_label(self, line: str) -> str | None:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            return None
+        etype = event.get("event")
+        if etype == "result":
+            return "✅ finishing up…"
+        if etype == "init":
+            return "🚀 starting…"
+        if isinstance(etype, str) and "tool" in etype:
+            return "🔧 running tool…"
+        if isinstance(etype, str) and ("message" in etype or "content" in etype):
+            return "📝 writing answer…"
+        return None

@@ -14,6 +14,8 @@ from lark_oapi.api.im.v1 import (
     DeleteMessageReactionRequest,
     Emoji,
     GetMessageRequest,
+    PatchMessageRequest,
+    PatchMessageRequestBody,
     ReplyMessageRequest,
     ReplyMessageRequestBody,
 )
@@ -70,6 +72,51 @@ class LarkClient:
             }
             if not self._send(message_id, "interactive", card, in_thread):
                 self._send(message_id, "text", {"text": part}, in_thread)
+
+    # -- streaming: post an editable card, then patch it in place ---------- #
+    @staticmethod
+    def _card(text: str) -> dict:
+        return {"schema": "2.0",
+                "body": {"elements": [{"tag": "markdown", "content": text}]}}
+
+    def post_card(self, message_id: str, text: str, in_thread: bool = False) -> str | None:
+        """Send an interactive card as a reply and return its message_id so it
+        can be edited later via :meth:`update_card`. Returns None on failure."""
+        req = (
+            ReplyMessageRequest.builder()
+            .message_id(message_id)
+            .request_body(
+                ReplyMessageRequestBody.builder()
+                .msg_type("interactive")
+                .content(json.dumps(self._card(text), ensure_ascii=False))
+                .reply_in_thread(in_thread)
+                .build()
+            )
+            .build()
+        )
+        resp = self._client.im.v1.message.reply(req)
+        if not resp.success():
+            logger.error("post_card failed: %s %s", resp.code, resp.msg)
+            return None
+        return resp.data.message_id
+
+    def update_card(self, message_id: str, text: str) -> bool:
+        """Edit a previously-sent card in place (progress updates). Best-effort;
+        returns False on failure (caller may ignore — it's a progress tick)."""
+        req = (
+            PatchMessageRequest.builder()
+            .message_id(message_id)
+            .request_body(
+                PatchMessageRequestBody.builder()
+                .content(json.dumps(self._card(text), ensure_ascii=False))
+                .build()
+            )
+            .build()
+        )
+        resp = self._client.im.v1.message.patch(req)
+        if not resp.success():
+            logger.warning("update_card failed: %s %s", resp.code, resp.msg)
+        return resp.success()
 
     # -- reactions (typing indicator) -------------------------------------- #
     def add_reaction(self, message_id: str, emoji_type: str) -> str | None:

@@ -71,3 +71,22 @@ class KiroEngine(Engine):
             segments.append("".join(current))
         ok = finished is None or finished.get("status") == "success"
         return [s.strip() for s in segments if s.strip()], sid, ok
+
+    def progress_label(self, line: str) -> str | None:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            return None
+        etype = event.get("type")
+        if etype == "runFinished":
+            return "✅ finishing up…"
+        if etype != "sessionUpdate":
+            return None
+        update = (event.get("data") or {}).get("update") or {}
+        kind = update.get("sessionUpdate")
+        if kind == "tool_call":
+            tool = update.get("title") or update.get("toolName") or update.get("kind") or "tool"
+            return f"🔧 {tool}"
+        if kind == "agent_message_chunk":
+            return "📝 writing answer…"
+        return None

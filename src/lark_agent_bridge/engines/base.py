@@ -33,6 +33,19 @@ class Engine:
         """
         raise NotImplementedError
 
+    def progress_label(self, line: str) -> str | None:
+        """Map a single stream-json *line* to a short human progress label.
+
+        Used by streaming mode to show "what the agent is doing right now"
+        (e.g. ``"🔧 tool: fs_read"``, ``"📝 writing answer…"``). Return ``None``
+        for lines that carry no user-meaningful progress (they are skipped).
+
+        Default returns ``None`` (no progress); engines override to surface
+        their own stream events. Must never raise — malformed lines return
+        ``None``.
+        """
+        return None
+
 
 def resolve_binary(explicit: str, *candidates: str) -> str | None:
     """Resolve a CLI binary: honour *explicit* if set, else search PATH.

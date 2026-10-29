@@ -9,6 +9,7 @@ authors = [{ name = "Dhiatamayo Fadhlika" }]
 keywords = ["lark", "feishu", "bot", "ai-agent", "cli", "bridge"]
 dependencies = [
     "lark-oapi>=1.6.4",
+    "pg8000>=1.31.6",
     "requests>=2.31",
 ]
 

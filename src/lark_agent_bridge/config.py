@@ -103,6 +103,10 @@ class Settings:
         self.engine_switch_context_lines: int = int(os.getenv("ENGINE_SWITCH_CONTEXT_LINES", "20"))
         # Reaction shown on the user's message while the agent works.
         self.typing_emoji: str = os.getenv("LARK_TYPING_EMOJI", "Typing")
+        # Streaming progress: post an editable card and patch it in place with
+        # "what the agent is doing right now" labels while it works, so long
+        # runs don't look dead. Additive; off by default (blocking path intact).
+        self.enable_streaming: bool = os.getenv("ENABLE_STREAMING", "0").strip() == "1"
 
         # --- Mutable at runtime (changed via slash commands) -----------------
         self.timeout_sec: int = int(_env("AGENT_TIMEOUT_SEC", "KIRO_TIMEOUT_SEC", default="600"))
@@ -128,6 +132,39 @@ class Settings:
         # typed in `/logs ... from <date> to <date>`. OpenObserve stores UTC;
         # people type wall-clock time. Default 7 = WIB (Asia/Jakarta).
         self.logs_tz_offset_hours: float = float(os.getenv("LOGS_TZ_OFFSET_HOURS", "7"))
+
+        # --- Knowledge retrieval (Postgres FTS; additive, off by default) ----
+        # When enabled, each request retrieves the most relevant chunks of past
+        # knowledge (LOG_SESSIONS, BACKLOG, etc.) from Postgres and injects them
+        # into the prompt, instead of loading the whole (large) markdown. Keeps
+        # knowledge searchable without blowing up context size every turn.
+        # Fail-open: if disabled / DB down / query fails, the bot runs normally.
+        self.enable_knowledge: bool = os.getenv("ENABLE_KNOWLEDGE", "0").strip() == "1"
+        # DSN, e.g. postgresql://andre:***@localhost:5432/andre_context
+        self.knowledge_db_dsn: str = os.getenv("PG_CONTEXT_DSN", os.getenv("KNOWLEDGE_DB_DSN", ""))
+        # How many chunks to retrieve and inject per request.
+        self.knowledge_top_k: int = int(os.getenv("KNOWLEDGE_TOP_K", "6"))
+        # Auto-sync the DB with the source markdown on startup (idempotent;
+        # fail-open). Defaults ON whenever knowledge is enabled so the DB never
+        # drifts behind the files after a memory update + restart. Set
+        # KNOWLEDGE_AUTO_INGEST=0 to skip (e.g. for a faster startup).
+        self.knowledge_auto_ingest: bool = (
+            os.getenv("KNOWLEDGE_AUTO_INGEST", "1").strip() != "0"
+        )
+        # Markdown files (under the steering dir) to ingest into Postgres. These
+        # are the large/situational ones; small always-load REF_* stay in files.
+        self.knowledge_sources: list[str] = [
+            x.strip()
+            for x in os.getenv(
+                "KNOWLEDGE_SOURCES",
+                "LOG_SESSIONS.md,BACKLOG.md,SKILL_LOGS.md,FSD_EXECUTION_PLAN.md",
+            ).split(",")
+            if x.strip()
+        ]
+        # Where the source markdown lives (the Kiro steering dir).
+        self.knowledge_steering_dir: str = os.getenv(
+            "KNOWLEDGE_STEERING_DIR", str(self.workdir / ".kiro" / "steering")
+        )
 
         # --- Process metadata ------------------------------------------------
         self.start_time: float = time.time()  # for /status uptime

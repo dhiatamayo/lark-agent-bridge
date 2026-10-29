@@ -183,3 +183,32 @@ def test_copilot_parse_no_result_is_failure(settings):
     assert ok is False
     assert sid is None
     assert segments == ["half"]
+
+
+# --- progress_label (streaming) ------------------------------------------- #
+def test_kiro_progress_label(settings):
+    eng = KiroEngine("kiro-cli", settings())
+    tool = json.dumps({"type": "sessionUpdate", "data": {"update": {
+        "sessionUpdate": "tool_call", "title": "fs_read"}}})
+    chunk = json.dumps({"type": "sessionUpdate", "data": {"update": {
+        "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "x"}}}})
+    assert eng.progress_label(tool) == "🔧 fs_read"
+    assert eng.progress_label(chunk) == "📝 writing answer…"
+    assert eng.progress_label(json.dumps({"type": "runFinished", "data": {}})) == "✅ finishing up…"
+    assert eng.progress_label("not json") is None  # never raises
+
+
+def test_agy_progress_label(settings):
+    eng = AgyEngine("agy", settings())
+    assert eng.progress_label(json.dumps({"event": "init"})) == "🚀 starting…"
+    assert eng.progress_label(json.dumps({"event": "tool_call"})) == "🔧 running tool…"
+    assert eng.progress_label(json.dumps({"event": "result"})) == "✅ finishing up…"
+    assert eng.progress_label("{bad") is None
+
+
+def test_copilot_progress_label(settings):
+    eng = CopilotEngine("copilot", settings())
+    assert eng.progress_label(json.dumps({"type": "assistant.message"})) == "📝 writing answer…"
+    assert eng.progress_label(json.dumps({"type": "result"})) == "✅ finishing up…"
+    assert eng.progress_label(json.dumps({"type": "tool.call", "data": {"name": "shell"}})) == "🔧 shell"
+    assert eng.progress_label("nope") is None

@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+import time
 
 from .config import Settings
 from .engines import Engine, EngineNotFound, build_engine
@@ -88,5 +89,75 @@ class AgentRunner:
             return f"({eng.name} returned no output)"
         return segments[-1] if self.settings.reply_mode == "final" else "\n\n".join(segments)
 
+    # -- streaming run ----------------------------------------------------- #
+    def run_streaming(self, prompt: str, on_progress) -> str:
+        """Like :meth:`run`, but invoke *on_progress(label)* as the engine emits
+        stream-json lines, so the caller can show live progress.
 
-__all__ = ["AgentRunner", "EngineNotFound"]
+        Reuses the engine's existing :meth:`parse` on the full captured stdout
+        for the final answer (no duplicated parsing). *on_progress* is
+        best-effort and must never raise fatally — exceptions from it are
+        swallowed so a flaky update call can't kill the run.
+        """
+        with self._lock:
+            eng = self.engine
+            sid = self.session_ids.get(eng.name)
+
+            preamble = self._pending_context.pop(eng.name, "")
+            if preamble:
+                prompt = preamble + "\n\n" + prompt
+
+            cmd = eng.build_cmd(prompt, sid)
+            env = os.environ.copy()
+            env["NO_COLOR"] = "1"
+
+            lines: list[str] = []
+            last_label: str | None = None
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=self.settings.workdir,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    stdin=subprocess.DEVNULL,
+                    bufsize=1,  # line-buffered
+                )
+            except Exception as exc:
+                return f"{eng.name} failed to start: {exc!r}"
+
+            try:
+                deadline = time.monotonic() + self.settings.timeout_sec
+                for line in proc.stdout:  # blocks per line until EOF
+                    lines.append(line)
+                    if time.monotonic() > deadline:
+                        proc.kill()
+                        return f"{eng.name} timed out after {self.settings.timeout_sec}s."
+                    label = eng.progress_label(line.rstrip("\n"))
+                    if label and label != last_label:
+                        last_label = label
+                        try:
+                            on_progress(label)
+                        except Exception:  # progress updates are best-effort
+                            pass
+                proc.wait(timeout=30)
+            except Exception as exc:
+                proc.kill()
+                return f"{eng.name} stream error: {exc!r}"
+
+            stdout = "".join(lines)
+            stderr = strip_ansi((proc.stderr.read() if proc.stderr else "") or "").strip()
+            segments, new_sid, ok = eng.parse(stdout)
+            if new_sid:
+                self.session_ids[eng.name] = new_sid
+
+        if proc.returncode != 0 or not ok:
+            partial = "\n\n".join(segments)
+            status = "error" if proc.returncode == 0 else f"exit code {proc.returncode}"
+            return f"{eng.name} failed ({status}).\n\n{stderr or partial}"[: self.settings.max_chunk * 3]
+        if not segments:
+            return f"({eng.name} returned no output)"
+        return segments[-1] if self.settings.reply_mode == "final" else "\n\n".join(segments)

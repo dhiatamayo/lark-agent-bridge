@@ -73,3 +73,19 @@ class CopilotEngine(Engine):
         if not have_result:
             ok = False
         return segments, sid, ok
+
+    def progress_label(self, line: str) -> str | None:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            return None
+        etype = event.get("type")
+        if etype == "result":
+            return "✅ finishing up…"
+        if etype == "assistant.message":
+            return "📝 writing answer…"
+        if isinstance(etype, str) and etype.startswith("tool"):
+            data = event.get("data") or {}
+            tool = data.get("name") or data.get("tool") or etype.split(".")[-1]
+            return f"🔧 {tool}"
+        return None
