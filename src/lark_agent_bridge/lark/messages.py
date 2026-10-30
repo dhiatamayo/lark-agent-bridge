@@ -98,6 +98,64 @@ def flatten_post(content: str) -> str:
         return ""
 
 
+def flatten_card(content: str) -> str:
+    """Flatten a Lark 'interactive' (card) content JSON into plain text.
+
+    Card content varies, but the user-authored text is most reliably found in
+    the ``user_dsl`` field (a JSON *string*) under ``body.elements[].content``
+    (tags ``markdown``/``text``/``lark_md``/...). When a card is forwarded/shared
+    (e.g. a doc preview), the top-level ``elements`` only carry the rendered
+    thumbnail (``img`` + blank ``text``), so ``user_dsl`` is preferred.
+
+    Resolution order: ``user_dsl.body.elements[].content`` -> top-level
+    ``elements`` (post-style line/element AST) -> "". Never raises.
+    """
+    try:
+        data = json.loads(content)
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+
+    # 1) Preferred: the card's source DSL (carries real markdown/text).
+    dsl = data.get("user_dsl")
+    if isinstance(dsl, str) and dsl:
+        try:
+            parsed = json.loads(dsl)
+        except (ValueError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            body = parsed.get("body") or {}
+            parts: list[str] = []
+            for el in body.get("elements", []) or []:
+                if not isinstance(el, dict):
+                    continue
+                txt = el.get("content") or el.get("text") or ""
+                if isinstance(txt, str) and txt.strip():
+                    parts.append(txt)
+            joined = "\n".join(parts).strip()
+            if joined:
+                return joined
+
+    # 2) Fallback: top-level 'elements' is a post-style line/element AST.
+    lines: list[str] = []
+    for line in data.get("elements", []) or []:
+        seg: list[str] = []
+        for el in line or []:
+            if not isinstance(el, dict):
+                continue
+            tag = el.get("tag")
+            if tag in ("text", "a", "link", "markdown", "lark_md"):
+                seg.append(el.get("text") or el.get("content") or "")
+            elif tag == "at":
+                seg.append(el.get("user_name") or el.get("text") or "")
+        if seg:
+            lines.append("".join(seg))
+    title = data.get("title") or ""
+    out = "\n".join(x for x in lines if x).strip()
+    return (f"{title}\n{out}".strip() if title else out) or ""
+
+
 def extract_text(msg_type: str, content: str) -> str:
     """Turn a Lark message content JSON into plain text, by message type.
 
@@ -111,6 +169,8 @@ def extract_text(msg_type: str, content: str) -> str:
             return ""
     if msg_type == "post":
         return flatten_post(content)
+    if msg_type == "interactive":
+        return flatten_card(content)
     return ""
 
 

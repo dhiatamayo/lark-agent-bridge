@@ -51,6 +51,51 @@ def test_flatten_post_at_tag():
     assert messages.flatten_post(content) == "Bob hi"
 
 
+# -- flatten_card (interactive) --------------------------------------------- #
+
+def test_flatten_card_user_dsl_markdown():
+    # Real shape seen on a forwarded card: elements carry only a thumbnail,
+    # the real text lives in user_dsl.body.elements[].content (markdown).
+    dsl = json.dumps({
+        "body": {"elements": [
+            {"tag": "markdown", "element_id": "e1",
+             "content": "Hasil regression **LULUS**\n100.0% pass rate"},
+        ]},
+        "config": {}, "schema": "2.0",
+    })
+    content = json.dumps({
+        "title": None,
+        "elements": [[{"tag": "img", "image_key": "img_x"},
+                      {"tag": "text", "text": " "}, {"tag": "text", "text": ""}]],
+        "user_dsl": dsl,
+    })
+    assert messages.flatten_card(content) == "Hasil regression **LULUS**\n100.0% pass rate"
+    # routed through extract_text too
+    assert messages.extract_text("interactive", content).startswith("Hasil regression")
+
+
+def test_flatten_card_fallback_top_level_elements():
+    # No user_dsl -> fall back to the top-level post-style elements.
+    content = json.dumps({
+        "title": "Card Title",
+        "elements": [[{"tag": "text", "text": "hello from card"}]],
+    })
+    assert messages.flatten_card(content) == "Card Title\nhello from card"
+
+
+def test_flatten_card_image_only_returns_empty():
+    # Image-only card with no text anywhere -> "" (caller handles gracefully).
+    content = json.dumps({
+        "title": None,
+        "elements": [[{"tag": "img", "image_key": "img_x"}]],
+    })
+    assert messages.flatten_card(content) == ""
+
+
+def test_flatten_card_bad_json():
+    assert messages.flatten_card("not-json") == ""
+
+
 def test_strip_mention_placeholders():
     assert messages.strip_mention_placeholders("@_user_1 hello @_user_22 there") == "hello  there"
 

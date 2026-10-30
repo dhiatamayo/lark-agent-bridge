@@ -17,7 +17,7 @@ from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 from . import commands
 from .config import Settings
 from .lark.client import LarkClient
-from .lark.messages import bot_is_mentioned, extract_text, md_chunks, strip_mention_placeholders
+from .lark.messages import bot_is_mentioned, extract_text, strip_mention_placeholders
 from .runner import AgentRunner
 from .transcript import TranscriptStore
 
@@ -149,15 +149,13 @@ class Bot:
         except Exception as exc:
             answer = f"Bridge error: {exc!r}"
 
-        # Render the final answer. If it fits one card, edit the progress card in
-        # place. If it needs chunking, finish the card and send the full reply.
-        parts = list(md_chunks(answer, self.settings.max_chunk))
-        if len(parts) <= 1:
-            if not self.client.update_card(progress_mid, answer):
-                self.client.reply(message_id, answer, in_thread)
-        else:
-            self.client.update_card(progress_mid, "✅ done — full answer below")
-            self.client.reply(message_id, answer, in_thread)
+        # Always deliver the final answer as a NEW message so Lark fires a
+        # notification — the owner often reads the live progress card before it
+        # turns into the answer, and editing a card in place sends no notify.
+        # The progress card is closed into a short "done" marker; the real
+        # answer (possibly chunked) is sent as a fresh reply.
+        self.client.update_card(progress_mid, "✅ done — jawaban di bawah 👇")
+        self.client.reply(message_id, answer, in_thread)
         self.transcript.log("out", message_id=message_id, msg_type="reply", text=answer)
 
     # -- inbound event ----------------------------------------------------- #
@@ -180,14 +178,26 @@ class Bot:
             logger.warning("ignored message from unauthorized open_id=%s", sender)
             return
 
-        if msg.message_type in ("text", "post"):
+        if msg.message_type in ("text", "post", "interactive"):
             text = extract_text(msg.message_type, msg.content)
+            if msg.message_type == "interactive" and not text:
+                # A card with no extractable text (e.g. image-only share).
+                self.transcript.log("in", message_id=msg.message_id,
+                                    msg_type=msg.message_type, sender=sender,
+                                    text="", raw=msg.content)
+                self.client.reply(
+                    msg.message_id,
+                    "I got a card but couldn't read any text from it. "
+                    "Try forwarding it as text, or paste the content.",
+                )
+                return
         else:
             self.transcript.log("in", message_id=msg.message_id, msg_type=msg.message_type,
                                 sender=sender, text="", raw=msg.content)
             self.client.reply(
                 msg.message_id,
-                "Only text and rich-text (post) messages are supported for now.",
+                "Only text, rich-text (post), and card (interactive) messages "
+                "are supported for now.",
             )
             return
 
