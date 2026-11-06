@@ -1,6 +1,6 @@
 [project]
 name = "lark-agent-bridge"
-version = "0.1.0"
+version = "0.1.1"
 description = "A Lark (Feishu) bot that bridges chat messages to agentic coding CLIs (Kiro CLI, Antigravity agy)."
 readme = "README.md"
 requires-python = ">=3.11"
