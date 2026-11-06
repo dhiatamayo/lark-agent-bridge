@@ -98,6 +98,32 @@ def flatten_post(content: str) -> str:
         return ""
 
 
+_CARD_TEXT_TAGS = ("markdown", "plain_text", "lark_md", "div", "text")
+
+
+def _collect_card_text(elements: object, out: list[str], depth: int = 0) -> None:
+    """Walk card-2.0 elements (incl. nested containers) and collect text.
+
+    Reads ``content`` of text-like tags, ``text.content`` of ``div``, and
+    recurses into ``elements`` / ``columns``. Bounded depth; never raises.
+    """
+    if depth > 6 or not isinstance(elements, list):
+        return
+    for el in elements:
+        if not isinstance(el, dict):
+            continue
+        txt = el.get("content")
+        if el.get("tag") in _CARD_TEXT_TAGS:
+            if not isinstance(txt, str):
+                inner = el.get("text")
+                txt = inner.get("content") if isinstance(inner, dict) else inner
+            if isinstance(txt, str) and txt.strip():
+                out.append(txt)
+        for key in ("elements", "columns"):
+            if key in el:
+                _collect_card_text(el.get(key), out, depth + 1)
+
+
 def flatten_card(content: str) -> str:
     """Flatten a Lark 'interactive' (card) content JSON into plain text.
 
@@ -116,6 +142,20 @@ def flatten_card(content: str) -> str:
         return ""
     if not isinstance(data, dict):
         return ""
+
+    # 0) Card JSON 2.0 as returned with ``card_msg_content_type=user_card_content``:
+    #    {"header": {...}, "body": {"elements": [{"tag": "markdown", "content": ...}]}}
+    if isinstance(data.get("body"), dict) and "elements" in data["body"]:
+        parts: list[str] = []
+        header = data.get("header")
+        if isinstance(header, dict):
+            title = header.get("title")
+            if isinstance(title, dict) and isinstance(title.get("content"), str):
+                parts.append(title["content"])
+        _collect_card_text(data["body"].get("elements"), parts)
+        joined = "\n".join(p for p in parts if p.strip()).strip()
+        if joined:
+            return joined
 
     # 1) Preferred: the card's source DSL (carries real markdown/text).
     dsl = data.get("user_dsl")

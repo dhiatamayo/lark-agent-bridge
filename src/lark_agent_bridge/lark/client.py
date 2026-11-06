@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 
 _DOMAINS = {"feishu": lark.FEISHU_DOMAIN, "lark": lark.LARK_DOMAIN}
 
+# Without this, Lark returns interactive (card) messages as a blank placeholder.
+# ``user_card_content`` returns the card JSON 2.0 with the real text.
+CARD_CONTENT_TYPE = "user_card_content"
+
 
 class LarkClient:
     """Convenience methods on top of the lark-oapi client."""
@@ -160,7 +164,12 @@ class LarkClient:
         this"). Best-effort: returns ``("", "")`` on any failure/unsupported type.
         """
         try:
-            req = GetMessageRequest.builder().message_id(message_id).build()
+            req = (
+                GetMessageRequest.builder()
+                .message_id(message_id)
+                .card_msg_content_type(CARD_CONTENT_TYPE)
+                .build()
+            )
             resp = self._client.im.v1.message.get(req)
             if not resp.success() or not resp.data or not resp.data.items:
                 if not resp.success():
@@ -169,6 +178,8 @@ class LarkClient:
             item = resp.data.items[0]
             content = item.body.content if item.body else ""
             text = extract_text(item.msg_type or "", content or "")
+            if (item.msg_type or "") == "merge_forward":
+                text = self._merge_forward_text(resp.data.items[1:])
             sender = ""
             if item.sender and getattr(item.sender, "id", None):
                 sender = item.sender.id
@@ -176,6 +187,35 @@ class LarkClient:
         except Exception as exc:  # never break the main flow
             logger.warning("get_message_text error: %r", exc)
             return "", ""
+
+    # -- merge_forward expansion ------------------------------------------- #
+    @staticmethod
+    def _merge_forward_text(children: list) -> str:
+        """Flatten the child messages of a merge_forward into one text block."""
+        lines: list[str] = []
+        for ch in children or []:
+            body = ch.body.content if getattr(ch, "body", None) else ""
+            t = extract_text(getattr(ch, "msg_type", "") or "", body or "")
+            if t:
+                lines.append(t)
+        return "[Forwarded messages]\n" + "\n".join(lines) if lines else ""
+
+    def _fetch_merge_forward(self, message_id: str) -> str:
+        """Fetch a merge_forward message and return its children as text."""
+        try:
+            req = (
+                GetMessageRequest.builder()
+                .message_id(message_id)
+                .card_msg_content_type(CARD_CONTENT_TYPE)
+                .build()
+            )
+            resp = self._client.im.v1.message.get(req)
+            if not resp.success() or not resp.data or not resp.data.items:
+                return ""
+            return self._merge_forward_text(resp.data.items[1:])
+        except Exception as exc:  # never break the main flow
+            logger.warning("merge_forward expand error: %r", exc)
+            return ""
 
     # -- fetch a whole thread (for @mention-in-thread context) ------------- #
     def list_thread_messages(
@@ -202,6 +242,7 @@ class LarkClient:
                     .container_id(thread_id)
                     .sort_type("ByCreateTimeAsc")
                     .with_sender_name(True)
+                    .card_msg_content_type(CARD_CONTENT_TYPE)
                     .page_size(min(50, max_messages - len(out)))
                 )
                 if page_token:
@@ -215,7 +256,10 @@ class LarkClient:
                 data = resp.data
                 for item in (data.items or []) if data else []:
                     content = item.body.content if item.body else ""
-                    text = extract_text(item.msg_type or "", content or "")
+                    if (item.msg_type or "") == "merge_forward":
+                        text = self._fetch_merge_forward(item.message_id)
+                    else:
+                        text = extract_text(item.msg_type or "", content or "")
                     if not text:
                         continue
                     name = ""
