@@ -14,6 +14,7 @@ from typing import Any
 
 from ..config import Settings
 from ..secrets import SecretError, SecretStore
+from .grafana import GrafanaClient
 from .openobserve import LogQueryResult, OpenObserveClient, OpenObserveError, parse_time_range
 from .registry import Registry, RegistryError
 
@@ -26,9 +27,11 @@ _MAX_FIELD_LEN = 300
 class ObservabilityService:
     """Facade over the registry + backend clients for the chat commands."""
 
-    def __init__(self, registry: Registry, openobserve: OpenObserveClient | None):
+    def __init__(self, registry: Registry, openobserve: OpenObserveClient | None,
+                 grafana: GrafanaClient | None = None):
         self.registry = registry
         self.openobserve = openobserve
+        self.grafana = grafana
 
     # -- /projects --------------------------------------------------------- #
     def list_projects(self) -> str:
@@ -116,8 +119,18 @@ class ObservabilityService:
             return self._format_result(target.name, result, query_text)
 
         if target.backend == "grafana":
-            return ("⚠️ Grafana log access isn't wired yet — OpenObserve only for now. "
-                    f"(project '{target.name}' is a Grafana project.)")
+            if self.grafana is None:
+                return ("⚠️ Grafana is not configured "
+                        "(set GRAFANA_BASE_URL and grafana.user/password secrets).")
+            try:
+                result = self.grafana.search(
+                    target, query_text, window, limit,
+                    start_us=start_us, end_us=end_us,
+                    tz_offset_hours=tz_offset_hours, order=order,
+                )
+            except (OpenObserveError, SecretError) as exc:
+                return f"⚠️ Grafana query failed: {exc}"
+            return self._format_result(target.name, result, query_text)
 
         return f"⚠️ Unsupported backend '{target.backend}' for project '{project}'."
 
@@ -151,10 +164,19 @@ class ObservabilityService:
                 )
             start_us, end_us = parse_time_range(start, end, tz_offset_hours)
 
+        if target.backend == "grafana":
+            if self.grafana is None:
+                raise OpenObserveError(
+                    "Grafana is not configured (GRAFANA_BASE_URL / credentials missing)"
+                )
+            return self.grafana.search(
+                target, query_text, window, limit,
+                start_us=start_us, end_us=end_us,
+                tz_offset_hours=tz_offset_hours, order=order,
+            )
         if target.backend != "openobserve":
             raise OpenObserveError(
-                f"project '{project}' backend '{target.backend}' "
-                "is not supported by the raw CLI path (openobserve only)"
+                f"project '{project}' backend '{target.backend}' is not supported"
             )
         if self.openobserve is None:
             raise OpenObserveError(
@@ -241,17 +263,22 @@ def build_observability(settings: Settings) -> ObservabilityService | None:
         return None
 
     openobserve: OpenObserveClient | None = None
-    if settings.openobserve_base_url and settings.secrets_path:
+    grafana: GrafanaClient | None = None
+    if settings.secrets_path:
         try:
             store = SecretStore(
                 settings.secrets_path,
                 key_file=settings.secret_key_file or None,
             )
-            openobserve = OpenObserveClient(settings.openobserve_base_url, store)
+            if settings.openobserve_base_url:
+                openobserve = OpenObserveClient(settings.openobserve_base_url, store)
+            if settings.grafana_base_url:
+                grafana = GrafanaClient(settings.grafana_base_url, store)
         except SecretError:
             openobserve = None
+            grafana = None
 
-    return ObservabilityService(registry, openobserve)
+    return ObservabilityService(registry, openobserve, grafana)
 
 
 __all__ = ["ObservabilityService", "build_observability"]

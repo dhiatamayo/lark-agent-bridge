@@ -123,6 +123,7 @@ class Settings:
         self.enable_observability: bool = os.getenv("ENABLE_OBSERVABILITY", "0").strip() == "1"
         self.observability_registry: str = os.getenv("OBSERVABILITY_REGISTRY", "")
         self.openobserve_base_url: str = os.getenv("OPENOBSERVE_BASE_URL", "").rstrip("/")
+        self.grafana_base_url: str = os.getenv("GRAFANA_BASE_URL", "").rstrip("/")
         # Encrypted secret store location + key source (key lives OUTSIDE repo).
         self.secrets_path: str = os.getenv("LAB_SECRETS_PATH", "")
         self.secret_key_file: str = os.getenv("LAB_SECRET_KEY_FILE", "")
