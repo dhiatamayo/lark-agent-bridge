@@ -45,6 +45,8 @@ COPILOT_KNOWN_MODELS = [
 # Reasoning-effort levels, per engine (used by /effort validation).
 AGY_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
 COPILOT_EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+# command-code documents low/medium/high; the real set depends on the model.
+COMMANDCODE_EFFORT_LEVELS = ["low", "medium", "high"]
 
 
 def format_help() -> str:
@@ -56,12 +58,12 @@ def format_help() -> str:
         "• `/usage` — today's message stats from the local transcript\n"
         "• `/transcript [n]` — show the last [n] transcript entries today (default 5)\n\n"
         "**Engine & model:**\n"
-        "• `/engine` — show the active engine (kiro / agy / copilot)\n"
-        "• `/engine <kiro|agy|copilot>` — switch backend engine (+ inject recent context)\n"
+        "• `/engine` — show the active engine (kiro / agy / copilot / commandcode)\n"
+        "• `/engine <kiro|agy|copilot|commandcode>` — switch backend engine (+ inject recent context)\n"
         "• `/model` — show the active model on the current engine\n"
-        "• `/model <name>` — change model (agy / copilot)\n"
-        "• `/models` — list known models (agy / copilot)\n"
-        "• `/effort [level]` — show/set reasoning effort (agy / copilot)\n\n"
+        "• `/model <name>` — change model (agy / copilot / commandcode)\n"
+        "• `/models` — list known models (agy / copilot / commandcode)\n"
+        "• `/effort [level]` — show/set reasoning effort (agy / copilot / commandcode)\n\n"
         "**Operational:**\n"
         "• `/timeout [sec]` — show/adjust command timeout (default 600s)\n"
         "• `/reply [final|all]` — show/toggle reply mode\n"
@@ -117,7 +119,13 @@ def dispatch(text: str, runner: AgentRunner, transcript: TranscriptStore,
             ) + "\n\nSelect with `/model <name>`. `auto` lets Copilot pick. "
                 "The exact set depends on your Copilot plan and may change; "
                 "`--model` accepts other names too.")
-        return "Model list is only available for the *agy* and *copilot* engines."
+        if runner.engine.name == "commandcode":
+            return ("📋 **Models for commandcode:**\n\n"
+                    "The list depends on your Command Code account and changes over time, "
+                    "so it is not hard-coded here. Run `command-code --list-models` on the "
+                    "server to see it.\n\nSelect with `/model <name>`; "
+                    "`/model default` resets to the CLI default.")
+        return "Model list is only available for the *agy*, *copilot* and *commandcode* engines."
 
     if cmd == "/effort" or cmd.startswith("/effort "):
         return _effort(raw, runner, settings)
@@ -173,6 +181,9 @@ def _status(runner: AgentRunner, transcript: TranscriptStore, settings: Settings
     elif runner.engine.name == "copilot":
         model_info = settings.copilot_model or "default (cli)"
         effort_info = settings.copilot_effort or "default"
+    elif runner.engine.name == "commandcode":
+        model_info = settings.commandcode_model or "default (cli)"
+        effort_info = settings.commandcode_effort or "default"
     else:
         model_info = "managed by Kiro profile"
         effort_info = "n/a"
@@ -219,6 +230,10 @@ def _model(raw: str, runner: AgentRunner, settings: Settings) -> str:
             cur = settings.copilot_model or "default (cli, e.g. auto)"
             return (f"Engine: *copilot*\nActive model: `{cur}`\n\n"
                     "Change with `/model <name>` or list with `/models`.")
+        if engine == "commandcode":
+            cur = settings.commandcode_model or "default (cli)"
+            return (f"Engine: *commandcode*\nActive model: `{cur}`\n\n"
+                    "Change with `/model <name>` or see `/models`.")
         return ("Engine: *kiro*\nModel is managed server-side by the Kiro "
                 "profile and cannot be changed via the CLI.")
     # set
@@ -235,7 +250,13 @@ def _model(raw: str, runner: AgentRunner, settings: Settings) -> str:
             return "copilot model reset to the CLI default."
         settings.copilot_model = new_model
         return f"copilot model set to `{settings.copilot_model}`."
-    return "Kiro does not support changing models via the CLI. This is agy/copilot-only."
+    if engine == "commandcode":
+        if new_model.lower() in ("default", "reset", "clear"):
+            settings.commandcode_model = ""
+            return "commandcode model reset to the CLI default."
+        settings.commandcode_model = new_model
+        return f"commandcode model set to `{settings.commandcode_model}`."
+    return "Kiro does not support changing models via the CLI. This is agy/copilot/commandcode-only."
 
 
 def _effort(raw: str, runner: AgentRunner, settings: Settings) -> str:
@@ -245,8 +266,10 @@ def _effort(raw: str, runner: AgentRunner, settings: Settings) -> str:
         levels, attr = AGY_EFFORT_LEVELS, "agy_effort"
     elif engine == "copilot":
         levels, attr = COPILOT_EFFORT_LEVELS, "copilot_effort"
+    elif engine == "commandcode":
+        levels, attr = COMMANDCODE_EFFORT_LEVELS, "commandcode_effort"
     else:
-        return "Reasoning effort is only supported by the *agy* and *copilot* engines."
+        return "Reasoning effort is only supported by the *agy*, *copilot* and *commandcode* engines."
 
     if len(parts) == 1:  # show
         cur = getattr(settings, attr) or "default"
@@ -308,8 +331,8 @@ def _engine(cmd: str, runner: AgentRunner, transcript: TranscriptStore,
             settings: Settings) -> str:
     parts = cmd.split()
     if len(parts) == 1:  # show
-        return (f"Active engine: *{runner.engine.name}*. Available: kiro, agy, copilot.\n"
-                "Switch with `/engine kiro`, `/engine agy`, or `/engine copilot`.")
+        return (f"Active engine: *{runner.engine.name}*. Available: kiro, agy, copilot, commandcode.\n"
+                "Switch with `/engine kiro`, `/engine agy`, `/engine copilot`, or `/engine commandcode`.")
     target = parts[1]
     if target == runner.engine.name:
         return f"Already on *{target}*."

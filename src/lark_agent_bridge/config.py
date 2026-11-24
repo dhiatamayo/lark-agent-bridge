@@ -85,12 +85,13 @@ class Settings:
 
         # --- Engine selection ------------------------------------------------
         # Which backend drives the bot: "kiro" (kiro-cli), "agy" (antigravity),
-        # or "copilot" (GitHub Copilot CLI).
+        # "copilot" (GitHub Copilot CLI), or "commandcode" (Command Code CLI).
         self.default_engine: str = os.getenv("AGENT_ENGINE", "kiro").strip().lower()
         # Optional explicit binary paths; auto-detected from PATH when empty.
         self.kiro_bin: str = os.getenv("KIRO_BIN", "")
         self.agy_bin: str = os.getenv("AGY_BIN", "")
         self.copilot_bin: str = os.getenv("COPILOT_BIN", "")
+        self.commandcode_bin: str = os.getenv("COMMANDCODE_BIN", "")
 
         # --- Transcript ------------------------------------------------------
         default_transcripts = Path(__file__).resolve().parent.parent.parent / "transcripts"
@@ -116,6 +117,8 @@ class Settings:
         self.agy_effort: str = os.getenv("AGY_EFFORT", "")    # low|medium|high|xhigh|max
         self.copilot_model: str = os.getenv("COPILOT_MODEL", "")   # empty => copilot's default (e.g. 'auto')
         self.copilot_effort: str = os.getenv("COPILOT_EFFORT", "")  # none|minimal|low|medium|high|xhigh|max
+        self.commandcode_model: str = os.getenv("COMMANDCODE_MODEL", "")   # empty => command-code's default
+        self.commandcode_effort: str = os.getenv("COMMANDCODE_EFFORT", "")  # low|medium|high (depends on model)
 
         # --- Observability (log access tool; additive, off by default) -------
         # When enabled, /logs and /projects can query OpenObserve/Grafana using

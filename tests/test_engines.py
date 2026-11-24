@@ -11,6 +11,7 @@ import pytest
 
 from lark_agent_bridge.config import Settings
 from lark_agent_bridge.engines.agy import AgyEngine
+from lark_agent_bridge.engines.commandcode import CommandCodeEngine
 from lark_agent_bridge.engines.copilot import CopilotEngine
 from lark_agent_bridge.engines.kiro import KiroEngine
 
@@ -185,7 +186,87 @@ def test_copilot_parse_no_result_is_failure(settings):
     assert segments == ["half"]
 
 
+# --- commandcode ----------------------------------------------------------- #
+def _cc_result(**kw):
+    base = {"type": "result", "subtype": "success", "usage": {}, "durationMs": 5, "finalText": "done"}
+    base.update(kw)
+    return json.dumps(base)
+
+
+def test_commandcode_build_cmd_basics_readonly(settings):
+    """Default trust (read,grep) must NOT lift the headless write/shell block."""
+    eng = CommandCodeEngine("command-code", settings(AGENT_TRUST_TOOLS="read,grep"))
+    cmd = eng.build_cmd("fix the bug", None)
+    assert cmd[0] == "command-code"
+    assert "--output-format" in cmd and "json" in cmd
+    assert "--yolo" not in cmd
+    assert cmd[-2] == "-p" and cmd[-1] == "fix the bug"
+    assert "--resume" not in cmd
+
+
+def test_commandcode_build_cmd_yolo_only_when_trust_all(settings):
+    eng = CommandCodeEngine("command-code", settings(AGENT_TRUST_TOOLS="all"))
+    assert "--yolo" in eng.build_cmd("x", None)
+
+
+def test_commandcode_build_cmd_model_effort_resume(settings):
+    eng = CommandCodeEngine("command-code", settings(COMMANDCODE_MODEL="claude-sonnet-4-6", COMMANDCODE_EFFORT="high"))
+    cmd = eng.build_cmd("hi", "9f4e1c0a-aaaa")
+    assert cmd[cmd.index("--model") + 1] == "claude-sonnet-4-6"
+    assert cmd[cmd.index("--effort") + 1] == "high"
+    assert cmd[cmd.index("--resume") + 1] == "9f4e1c0a-aaaa"
+    assert cmd[-2:] == ["-p", "hi"]  # prompt stays last
+
+
+def test_commandcode_parse_success(settings):
+    eng = CommandCodeEngine("command-code", settings())
+    stdout = "\n".join([
+        json.dumps({"type": "event", "event": {"type": "tool_running", "toolName": "read_file"}}),
+        _cc_result(sessionId="sess-1", stopReason="end_turn", finalText="  the answer  "),
+    ])
+    segments, sid, ok = eng.parse(stdout)
+    assert segments == ["the answer"]
+    assert sid == "sess-1"
+    assert ok is True
+
+
+def test_commandcode_parse_error_result_without_session(settings):
+    """Real shape seen when unauthenticated: subtype=error, no sessionId, empty text."""
+    eng = CommandCodeEngine("command-code", settings())
+    stdout = _cc_result(subtype="error", finalText="", error="Error: Not authenticated.")
+    segments, sid, ok = eng.parse(stdout)
+    assert ok is False
+    assert sid is None
+    assert segments == []
+
+
+def test_commandcode_parse_max_turns_keeps_partial_but_not_ok(settings):
+    eng = CommandCodeEngine("command-code", settings())
+    segments, sid, ok = eng.parse(_cc_result(subtype="max_turns", sessionId="s", finalText="partial"))
+    assert ok is False
+    assert segments == ["partial"]
+    assert sid == "s"
+
+
+def test_commandcode_parse_no_result_is_failure(settings):
+    eng = CommandCodeEngine("command-code", settings())
+    stdout = json.dumps({"type": "event", "event": {"type": "tool_running", "toolName": "x"}})
+    segments, sid, ok = eng.parse(stdout + "\nnot json at all")
+    assert ok is False and sid is None and segments == []
+
+
 # --- progress_label (streaming) ------------------------------------------- #
+def test_commandcode_progress_label(settings):
+    eng = CommandCodeEngine("command-code", settings())
+    tool = json.dumps({"type": "event", "event": {"type": "tool_running", "toolName": "read_file"}})
+    other = json.dumps({"type": "event", "event": {"type": "something_new"}})
+    assert eng.progress_label(tool) == "🔧 read_file"
+    assert eng.progress_label(other) is None  # unknown event types are ignored
+    assert eng.progress_label(_cc_result()) == "✅ finishing up…"
+    assert eng.progress_label("nope") is None
+
+
+
 def test_kiro_progress_label(settings):
     eng = KiroEngine("kiro-cli", settings())
     tool = json.dumps({"type": "sessionUpdate", "data": {"update": {

@@ -25,7 +25,7 @@ class _FakeRunner:
 
     def __init__(self, engine_name="kiro"):
         self.engine = _FakeEngine(engine_name)
-        self.session_ids = {"kiro": None, "agy": None, "copilot": None}
+        self.session_ids = {"kiro": None, "agy": None, "copilot": None, "commandcode": None}
         self.queued = {}
 
     def reset_session(self):
@@ -33,7 +33,7 @@ class _FakeRunner:
 
     def switch_engine(self, name):
         name = name.strip().lower()
-        if name not in ("kiro", "agy", "copilot"):
+        if name not in ("kiro", "agy", "copilot", "commandcode"):
             raise ValueError(f"Unknown engine {name!r}")
         # Simulate agy not installed to exercise the EngineNotFound path.
         if name == "agy" and getattr(self, "agy_missing", False):
@@ -121,7 +121,7 @@ def test_model_set_under_agy(settings, transcript):
 
 def test_models_under_kiro(settings, transcript):
     out = commands.dispatch("/models", _FakeRunner("kiro"), transcript, settings)
-    assert "*agy* and *copilot*" in out
+    assert "*agy*, *copilot* and *commandcode*" in out
 
 
 def test_effort_valid_under_agy(settings, transcript):
@@ -138,7 +138,7 @@ def test_effort_invalid_under_agy(settings, transcript):
 
 def test_effort_under_kiro(settings, transcript):
     out = commands.dispatch("/effort", _FakeRunner("kiro"), transcript, settings)
-    assert "*agy* and *copilot*" in out
+    assert "*agy*, *copilot* and *commandcode*" in out
 
 
 # --- copilot engine commands ----------------------------------------------- #
@@ -190,6 +190,48 @@ def test_effort_none_under_copilot(settings, transcript):
 
 def test_effort_invalid_under_copilot(settings, transcript):
     out = commands.dispatch("/effort turbo", _FakeRunner("copilot"), transcript, settings)
+    assert "invalid effort" in out.lower()
+
+
+# --- commandcode engine commands ------------------------------------------- #
+def test_engine_switch_commandcode(settings, transcript):
+    runner = _FakeRunner("kiro")
+    out = commands.dispatch("/engine commandcode", runner, transcript, settings)
+    assert runner.engine.name == "commandcode"
+    assert "Switched engine" in out
+
+
+def test_engine_show_lists_commandcode(settings, transcript):
+    out = commands.dispatch("/engine", _FakeRunner("kiro"), transcript, settings)
+    assert "commandcode" in out
+
+
+def test_model_set_and_reset_under_commandcode(settings, transcript):
+    runner = _FakeRunner("commandcode")
+    out = commands.dispatch("/model claude-sonnet-4-6", runner, transcript, settings)
+    assert settings.commandcode_model == "claude-sonnet-4-6"
+    assert "commandcode model set" in out.lower()
+    out = commands.dispatch("/model default", runner, transcript, settings)
+    assert settings.commandcode_model == ""
+    assert "reset" in out.lower()
+
+
+def test_model_show_under_commandcode(settings, transcript):
+    out = commands.dispatch("/model", _FakeRunner("commandcode"), transcript, settings)
+    assert "commandcode" in out.lower()
+
+
+def test_models_under_commandcode_points_to_cli(settings, transcript):
+    out = commands.dispatch("/models", _FakeRunner("commandcode"), transcript, settings)
+    assert "--list-models" in out
+
+
+def test_effort_under_commandcode(settings, transcript):
+    runner = _FakeRunner("commandcode")
+    out = commands.dispatch("/effort high", runner, transcript, settings)
+    assert settings.commandcode_effort == "high"
+    assert "effort set" in out.lower()
+    out = commands.dispatch("/effort turbo", runner, transcript, settings)
     assert "invalid effort" in out.lower()
 
 
