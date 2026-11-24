@@ -204,6 +204,14 @@ class Settings:
         self.knowledge_steering_dir: str = os.getenv(
             "KNOWLEDGE_STEERING_DIR", str(self.workdir / ".kiro" / "steering")
         )
+        # Refresh-on-change: before handling each message, if any steering
+        # ``*.md`` mtime changed since the last refresh, regenerate AGENTS.md
+        # and (when knowledge is enabled) re-ingest the DB. Cheap no-op when
+        # nothing changed; fail-open. Keeps context fresh without a restart or
+        # a manual sync. Set KNOWLEDGE_REFRESH_ON_CHANGE=0 to disable.
+        self.knowledge_refresh_on_change: bool = (
+            os.getenv("KNOWLEDGE_REFRESH_ON_CHANGE", "1").strip() != "0"
+        )
 
         # --- Process metadata ------------------------------------------------
         self.start_time: float = time.time()  # for /status uptime

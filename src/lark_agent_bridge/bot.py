@@ -10,6 +10,7 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
@@ -76,6 +77,11 @@ class Bot:
         self._seen: OrderedDict[str, float] = OrderedDict()  # message_id dedupe
         self._seen_lock = threading.Lock()
 
+        # Refresh-on-change state: serialise refreshes and remember the steering
+        # mtimes seen after startup auto-ingest so the first message is a no-op.
+        self._context_lock = threading.Lock()
+        self._steering_state: dict[str, float] = self._steering_snapshot()
+
         # Resolve the bot's own open_id so group-mention gating can tell when
         # the bot is specifically @mentioned (vs @all / other people).
         settings.bot_open_id_resolved = settings.bot_open_id or self.client.resolve_bot_open_id()
@@ -95,6 +101,55 @@ class Bot:
         self.client.reply(message_id, text, in_thread)
         self.transcript.log("out", message_id=message_id, msg_type="reply", text=text)
 
+    # -- context freshness (refresh-on-change) ----------------------------- #
+    def _steering_snapshot(self) -> dict[str, float]:
+        """Return ``{filename: mtime}`` for the steering ``*.md`` files."""
+        snap: dict[str, float] = {}
+        try:
+            src = Path(self.settings.knowledge_steering_dir)
+            if src.is_dir():
+                for p in src.glob("*.md"):
+                    try:
+                        snap[p.name] = p.stat().st_mtime
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+        return snap
+
+    def _maybe_refresh_context(self) -> None:
+        """If steering changed since the last refresh, regenerate AGENTS.md and
+        re-ingest the knowledge DB. Cheap no-op when nothing changed; fail-open
+        (a failed refresh never blocks the reply)."""
+        if not getattr(self.settings, "knowledge_refresh_on_change", False):
+            return
+        with self._context_lock:
+            snap = self._steering_snapshot()
+            if snap == self._steering_state:
+                return
+            logger.info("context refresh: steering changed, regenerating")
+            try:
+                from .context_sync import build, write_atomic
+                src = Path(self.settings.knowledge_steering_dir)
+                content, _ = build(src)
+                write_atomic(Path(self.settings.workdir) / "AGENTS.md", content)
+            except Exception as exc:
+                logger.warning("context refresh (AGENTS.md) failed: %r", exc)
+            if self.knowledge is not None:
+                try:
+                    from .knowledge.ingest import ingest_configured
+                    summary = ingest_configured(self.settings)
+                    logger.info(
+                        "context refresh: re-ingested sources=%d inserted=%d updated=%d pruned=%d",
+                        summary.get("sources", 0), summary.get("inserted", 0),
+                        summary.get("updated", 0), summary.get("pruned", 0),
+                    )
+                except Exception as exc:
+                    logger.warning("context refresh (ingest) skipped: %r", exc)
+            # Advance even on failure so a persistently bad file can't make us
+            # retry (and log) on every single message.
+            self._steering_state = snap
+
     # -- the actual work (runs in a worker thread) ------------------------- #
     def _handle(self, message_id: str, prompt: str, in_thread: bool) -> None:
         # Slash commands first; they return reply text (or None to forward).
@@ -102,6 +157,10 @@ class Bot:
         if reply_text is not None:
             self._reply(message_id, reply_text, in_thread)
             return
+
+        # Keep context fresh before we retrieve memory / spawn the engine: if
+        # the steering markdown changed, regenerate AGENTS.md + re-ingest.
+        self._maybe_refresh_context()
 
         # Retrieve relevant past-session knowledge and prepend it (fail-open:
         # any error → empty string → prompt unchanged).
