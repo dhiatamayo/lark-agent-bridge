@@ -76,6 +76,7 @@ class Bot:
         self._executor = ThreadPoolExecutor(max_workers=4)
         self._seen: OrderedDict[str, float] = OrderedDict()  # message_id dedupe
         self._seen_lock = threading.Lock()
+        self._open_id_lock = threading.Lock()
 
         # Refresh-on-change state: serialise refreshes and remember the steering
         # mtimes seen after startup auto-ingest so the first message is a no-op.
@@ -95,6 +96,28 @@ class Bot:
             while len(self._seen) > 1000:
                 self._seen.popitem(last=False)
             return False
+
+    # -- bot identity ------------------------------------------------------ #
+    def _ensure_bot_open_id(self) -> str:
+        """Return this bot's open_id, resolving it lazily if startup failed.
+
+        The startup lookup can fail (e.g. network not ready right after a
+        reboot); without a retry, group-mention gating would stay in its
+        fail-open mode for the whole process lifetime and answer mentions of
+        *other* people. Retrying once per group message (cached on success) is
+        cheap and self-heals without a restart.
+        """
+        with self._open_id_lock:
+            if not self.settings.bot_open_id_resolved:
+                resolved = self.client.resolve_bot_open_id()
+                if resolved:
+                    self.settings.bot_open_id_resolved = resolved
+                    logger.info("bot open_id resolved lazily: %s", resolved)
+                else:
+                    logger.warning(
+                        "bot open_id unresolved — group mention gate stays fail-open"
+                    )
+            return self.settings.bot_open_id_resolved
 
     # -- reply convenience ------------------------------------------------- #
     def _reply(self, message_id: str, text: str, in_thread: bool) -> None:
@@ -285,7 +308,7 @@ class Bot:
         # to revert to the old "any mention" behaviour.
         if msg.chat_type == "group":
             if self.settings.group_require_bot_mention:
-                if not bot_is_mentioned(msg.mentions, self.settings.bot_open_id_resolved):
+                if not bot_is_mentioned(msg.mentions, self._ensure_bot_open_id()):
                     return
             elif not msg.mentions:
                 return
